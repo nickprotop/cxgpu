@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rid: linux-x64
+            name: cxnvmon-linux-x64
+          - rid: linux-arm64
+            name: cxnvmon-linux-arm64
+          - rid: osx-x64
+            name: cxnvmon-osx-x64
+          - rid: osx-arm64
+            name: cxnvmon-osx-arm64
+          - rid: win-x64
+            name: cxnvmon-win-x64.exe
+          - rid: win-arm64
+            name: cxnvmon-win-arm64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore cxnvmon.csproj -r ${{ matrix.rid }}
+
+      - name: Build
+        run: |
+          dotnet publish cxnvmon.csproj -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            -o ./publish/${{ matrix.rid }}
+
+      - name: Rename binary
+        run: |
+          if [ -f "./publish/${{ matrix.rid }}/cxnvmon.exe" ]; then
+            mv ./publish/${{ matrix.rid }}/cxnvmon.exe ./publish/${{ matrix.rid }}/${{ matrix.name }}
+          else
+            mv ./publish/${{ matrix.rid }}/cxnvmon ./publish/${{ matrix.rid }}/${{ matrix.name }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ./publish/${{ matrix.rid }}/${{ matrix.name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          # Copy all platform binaries
+          for dir in ./artifacts/cxnvmon-*/; do
+            cp "$dir"/* release/ 2>/dev/null || true
+          done
+          cp install.sh release/
+          cp install.ps1 release/
+          cp uninstall.sh release/
+          cp uninstall.ps1 release/
+          chmod +x release/cxnvmon-linux-* release/cxnvmon-osx-* release/*.sh 2>/dev/null || true
+
+          # Generate checksums
+          cd release
+          sha256sum * > SHA256SUMS
+          cd ..
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          CURRENT_TAG="${GITHUB_REF#refs/tags/}"
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -n 1)
+
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log "${PREV_TAG}..${CURRENT_TAG}" --pretty=format:"- %s (%h)" --no-merges)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges -20)
+          fi
+
+          # Multi-line output
+          {
+            echo "CHANGELOG<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          body: |
+            # cxnvmon ${{ steps.version.outputs.VERSION }}
+
+            ntop/btop-inspired terminal system monitor built with SharpConsoleUI.
+
+            ## Installation
+
+            **Linux / macOS:**
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/nickprotop/cxnvmon/main/install.sh | bash
+            ```
+
+            **Windows (PowerShell):**
+            ```powershell
+            irm https://raw.githubusercontent.com/nickprotop/cxnvmon/main/install.ps1 | iex
+            ```
+
+            ## Manual Download
+
+            | Platform | Binary |
+            |----------|--------|
+            | Linux x64 | `cxnvmon-linux-x64` |
+            | Linux ARM64 | `cxnvmon-linux-arm64` |
+            | macOS x64 (Intel) | `cxnvmon-osx-x64` |
+            | macOS ARM64 (Apple Silicon) | `cxnvmon-osx-arm64` |
+            | Windows x64 | `cxnvmon-win-x64.exe` |
+            | Windows ARM64 | `cxnvmon-win-arm64.exe` |
+
+            ## Changes
+
+            ${{ steps.changelog.outputs.CHANGELOG }}
+
+            ## Checksums
+
+            See `SHA256SUMS` in the release assets.
+          draft: false
+          prerelease: false
