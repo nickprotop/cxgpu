@@ -8,6 +8,7 @@ using SharpConsoleUI.Builders;
 using SharpConsoleUI.Configuration;
 using SharpConsoleUI.Controls;
 using SharpConsoleUI.Layout;
+using SharpConsoleUI.Helpers;
 using SharpConsoleUI.Rendering;
 
 namespace cxnvmon.Dashboard;
@@ -38,6 +39,9 @@ internal sealed class DashboardWindow
         _mainWindow = new WindowBuilder(_windowSystem)
             .WithTitle("cxnvmon - NVIDIA GPU Monitor")
             .WithColors(UIConstants.PrimaryText, UIConstants.BaseBg)
+            .WithBackgroundGradient(
+                ColorGradient.FromColors(UIConstants.BaseBg, UIConstants.BaseEnd),
+                GradientDirection.DiagonalDown)
             .Borderless()
             .Maximized()
             .Resizable(false)
@@ -130,11 +134,12 @@ internal sealed class DashboardWindow
     private void CreateTabs()
     {
         if (_config.ShowOverviewTab)
-            _tabs.Add(new OverviewTab(_windowSystem, _stats));
+            _tabs.Add(new OverviewTab(_windowSystem, _stats, _config));
         if (_config.ShowProcessesTab)
             _tabs.Add(new ProcessesTab(_windowSystem, _stats));
-        if (_config.ShowDetailsTab)
-            _tabs.Add(new DetailsTab(_windowSystem, _stats));
+        // Details tab retired: the Overview left panel is now the full device spec-sheet, so a
+        // separate Details tab would just duplicate it. (DetailsTab.cs / the ShowDetailsTab config
+        // are kept so it can be re-enabled if ever needed.)
     }
 
     // Opens the modal settings dialog. The refresh interval applies live (the update loop reads
@@ -194,13 +199,12 @@ internal sealed class DashboardWindow
     }
 
     // Tab hotkeys start at F2 (F1 is conventionally Help) and map to a tab TYPE, not a fixed
-    // index — so they obey config: F2 Overview · F3 Processes · F4 Details. If a tab is hidden
-    // (ShowXTab=false) it isn't in _tabs, so its key resolves to nothing and does nothing.
+    // index — so they obey config: F2 Overview · F3 Processes. If a tab is hidden (ShowXTab=false)
+    // it isn't in _tabs, so its key resolves to nothing and does nothing.
     private bool HandleTabShortcut(ConsoleKey key) => key switch
     {
         ConsoleKey.F2 => SelectTab<OverviewTab>(),
         ConsoleKey.F3 => SelectTab<ProcessesTab>(),
-        ConsoleKey.F4 => SelectTab<DetailsTab>(),
         _ => false
     };
 
@@ -233,8 +237,6 @@ internal sealed class DashboardWindow
             builder.AddLeft("F2", "Overview", () => SelectTab<OverviewTab>());
         if (_config.ShowProcessesTab)
             builder.AddLeft("F3", "Processes", () => SelectTab<ProcessesTab>());
-        if (_config.ShowDetailsTab)
-            builder.AddLeft("F4", "Details", () => SelectTab<DetailsTab>());
 
         var statusBar = builder
             .AddLeftSeparator()

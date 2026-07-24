@@ -288,12 +288,19 @@ internal abstract class BaseResponsiveTab : ITab
             .WithAlignment(HorizontalAlignment.Stretch);
 
         if (header != null)
-            builder = builder.WithHeader(header);
+            builder = builder.WithHeader(CardHeaderMarkup(header));
 
         var card = builder.Build();
         card.ForegroundColor = UIConstants.PrimaryText;
         return card;
     }
+
+    // Wraps a card title in the CardTitle color markup. The card header is otherwise painted with
+    // the (subtle) border color, so titles must carry their own color — and, crucially, live
+    // header updates (card.Header = ...) MUST route through here too, or a refresh reverts the
+    // title to the dim border color.
+    internal static string CardHeaderMarkup(string title) =>
+        $"[{UIConstants.CardTitle.ToMarkup()} bold]{title}[/]";
 
     internal static void AddMarkupLines(ScrollablePanelControl panel, List<string> lines)
     {

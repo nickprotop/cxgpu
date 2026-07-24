@@ -22,6 +22,7 @@ internal static class SettingsDialog
 
     // Form field keys.
     private const string KeyRefresh = "refresh";
+    private const string KeySparkHeight = "sparkheight";
     private const string KeyOverview = "overview";
     private const string KeyProcesses = "processes";
     private const string KeyDetails = "details";
@@ -46,10 +47,14 @@ internal static class SettingsDialog
                 CxnvmonConfig.MinRefreshIntervalMs, CxnvmonConfig.MaxRefreshIntervalMs,
                 current.RefreshIntervalMs,
                 hint: $"{CxnvmonConfig.MinRefreshIntervalMs}–{CxnvmonConfig.MaxRefreshIntervalMs} ms between updates")
+            .AddSection("Graphs")
+            .AddSlider(KeySparkHeight, "Sparkline height",
+                CxnvmonConfig.MinSparklineHeight, CxnvmonConfig.MaxSparklineHeight,
+                current.SparklineHeight,
+                hint: $"{CxnvmonConfig.MinSparklineHeight}–{CxnvmonConfig.MaxSparklineHeight} rows (restart to apply)")
             .AddSection("Tabs")
             .AddCheckbox(KeyOverview, "Show Overview tab", current.ShowOverviewTab)
             .AddCheckbox(KeyProcesses, "Show Processes tab", current.ShowProcessesTab)
-            .AddCheckbox(KeyDetails, "Show Details tab", current.ShowDetailsTab)
             .WithButtons(ok: "Save")
             .Build();
 
@@ -86,6 +91,7 @@ internal static class SettingsDialog
         return new CxnvmonConfig
         {
             RefreshIntervalMs = ParseInt(values, KeyRefresh, current.RefreshIntervalMs),
+            SparklineHeight = ParseInt(values, KeySparkHeight, current.SparklineHeight),
             ShowOverviewTab = ParseBool(values, KeyOverview, current.ShowOverviewTab),
             ShowProcessesTab = ParseBool(values, KeyProcesses, current.ShowProcessesTab),
             ShowDetailsTab = ParseBool(values, KeyDetails, current.ShowDetailsTab),

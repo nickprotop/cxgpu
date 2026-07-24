@@ -1,3 +1,4 @@
+using System.Linq;
 using cxnvmon.Helpers;
 using cxnvmon.Stats;
 using SharpConsoleUI;
@@ -17,24 +18,124 @@ internal class OverviewTab : BaseResponsiveTab
     // Track history for sparklines. Increased points for better visual trends.
     private readonly KeyedHistoryTracker<string> _histories = new(200);
 
-    public OverviewTab(ConsoleWindowSystem windowSystem, IGpuStatsProvider stats)
+    private readonly int _sparklineHeight;
+
+    public OverviewTab(ConsoleWindowSystem windowSystem, IGpuStatsProvider stats, Configuration.CxnvmonConfig config)
         : base(windowSystem, stats)
     {
+        _sparklineHeight = config.SparklineHeight;
     }
 
+    // Metric icons — plain Unicode/emoji (NOT Nerd Font). SharpConsoleUI handles wide glyphs
+    // correctly (wide-continuation cells), so these render and align properly. Used in card titles.
+    private const string IconUtil = "⚙";
+    private const string IconMem = "🧠";
+    private const string IconTemp = "🌡";
+    private const string IconPower = "⚡";
+    private const string IconFan = "🌀";
+
+    // One-line hero vitals — an at-a-glance summary with per-metric icons and threshold coloring
+    // (green → yellow → red with load), so the whole GPU state reads instantly.
+    private static string HeroVitals(GpuSample gpu)
+    {
+        var muted = UIConstants.MutedText.ToMarkup();
+        double powerPct = gpu.PowerLimitWatts > 0 ? gpu.PowerDrawWatts / gpu.PowerLimitWatts * 100.0 : 0.0;
+        string sep = $"[{muted}]   [/]";
+
+        return
+            Metric(IconUtil, $"{gpu.UtilizationPercent:F0}%", gpu.UtilizationPercent) + sep +
+            Metric(IconMem, $"{gpu.MemoryUsedMb / 1024.0:F1}/{gpu.MemoryTotalMb / 1024.0:F1} GB", gpu.MemoryUsedPercent) + sep +
+            Metric(IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC) + sep +
+            Metric(IconPower, $"{gpu.PowerDrawWatts:F0} W", powerPct) + sep +
+            Metric(IconFan, $"{gpu.FanSpeedPercent:F0}%", gpu.FanSpeedPercent);
+    }
+
+    // An "<icon> <value>" fragment: icon plus a threshold-colored value.
+    private static string Metric(string icon, string value, double thresholdValue)
+    {
+        var color = UIConstants.ThresholdColor(thresholdValue).ToMarkup();
+        return $"{icon} [{color} bold]{value}[/]";
+    }
+
+    // Padding added to the measured spec-sheet width for the left column (breathing room before
+    // the separator).
+    private const int LeftColumnPadding = 2;
+
+    // Widest displayed line among markup lines, measured with the framework's StripLength so markup
+    // tags are ignored and wide glyphs count correctly.
+    private static int MeasureMaxWidth(List<string> lines)
+    {
+        int max = 0;
+        foreach (var line in lines)
+            max = Math.Max(max, SharpConsoleUI.Parsing.MarkupParser.StripLength(line));
+        return max;
+    }
+
+    // "1x4" (gen x width, as the provider assembles it) -> "PCIe 1.0 ×4".
+    private static string FormatPcie(string? genWidth)
+    {
+        if (string.IsNullOrWhiteSpace(genWidth)) return "";
+        var parts = genWidth.Split('x', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2) return $"PCIe {genWidth}";
+        return $"PCIe {parts[0].Trim()}.0 ×{parts[1].Trim()}";
+    }
+
+    // The left panel is the GPU's IDENTITY + hardware facts ("what it is") — deliberately the
+    // static/spec-sheet counterpart to the live gauges on the right ("what it's doing"). Rendered
+    // as colored, sectioned markup (AddMarkupLines parses markup, so colors apply here).
     protected override List<string> BuildTextContent(GpuSnapshot snapshot)
     {
         var lines = new List<string>();
+        var deviceInfos = Stats.ReadDeviceInfo();
+
+        var accent = UIConstants.Accent.ToMarkup();
+        var muted = UIConstants.MutedText.ToMarkup();
+        var text = UIConstants.PrimaryText.ToMarkup();
+
+        // Spec-sheet inside the bordered left card: an aligned "label   value unit" grid grouped by
+        // accent section headers (no inner rules — the card border frames it). Value bold/bright,
+        // label + unit muted.
+        const int labelW = 8;
+        void Section(string title) { lines.Add(""); lines.Add($"[{accent} bold]{title}[/]"); }
+        void Row(string label, string value, string unit = "") =>
+            lines.Add($"[{muted}]{label,-labelW}[/][{text} bold]{value,6}[/]" +
+                      (unit.Length > 0 ? $" [{muted}]{unit}[/]" : ""));
+
+        // Top margin: start the content one row down from the panel's top edge.
+        lines.Add("");
+
         foreach (var gpu in snapshot.Gpus)
         {
-            lines.Add($"[bold cyan]GPU {gpu.Index}[/]");
-            lines.Add($"  Utilization: {gpu.UtilizationPercent:F0}%");
-            lines.Add($"  Memory:      {gpu.MemoryUsedMb:F0}/{gpu.MemoryTotalMb:F0} MB ({gpu.MemoryUsedPercent:F0}%)");
-            lines.Add($"  Temperature: {gpu.TemperatureC:F0}°C");
-            lines.Add($"  Power:       {gpu.PowerDrawWatts:F0}/{gpu.PowerLimitWatts:F0} W");
-            lines.Add($"  Fan Speed:   {gpu.FanSpeedPercent:F0}%");
-            lines.Add($"  Clocks:      SM: {gpu.SmClockMhz:F0} MHz, Mem: {gpu.MemClockMhz:F0} MHz");
-            lines.Add("");
+            var d = deviceInfos.FirstOrDefault(di => di.Index == gpu.Index);
+
+            // Device title.
+            lines.Add($"[{accent} bold]{d?.Name ?? $"GPU {gpu.Index}"}[/]");
+
+            if (d != null)
+            {
+                if (!string.IsNullOrWhiteSpace(d.DriverVersion)) Row("Driver", d.DriverVersion);
+                var pcie = FormatPcie(d.PcieGenWidth);
+                if (pcie.Length > 0) Row("PCIe", pcie.Replace("PCIe ", ""));
+                if (!string.IsNullOrWhiteSpace(d.CudaVersion)) Row("CUDA", d.CudaVersion);
+            }
+
+            Section("CLOCKS");
+            Row("SM", $"{gpu.SmClockMhz:F0}", "MHz");
+            Row("Mem", $"{gpu.MemClockMhz:F0}", "MHz");
+
+            Section("CAPACITY");
+            Row("VRAM", $"{gpu.MemoryTotalMb / 1024.0:F1}", "GB");
+
+            Section("LIMITS");
+            Row("Power", $"{(d?.PowerLimitWatts ?? gpu.PowerLimitWatts):F0}", "W");
+            if (d?.TemperatureLimitC is > 0)
+                Row("Temp", $"{d.TemperatureLimitC:F0}", "°C");
+
+            if (!string.IsNullOrWhiteSpace(d?.VBiosVersion))
+            {
+                Section("BIOS");
+                lines.Add($"[{text}]{d.VBiosVersion}[/]");
+            }
         }
 
         if (snapshot.Gpus.Count == 0)
@@ -47,25 +148,45 @@ internal class OverviewTab : BaseResponsiveTab
     {
         if (snapshot.Gpus.Count == 0) return;
 
+        var deviceInfos = Stats.ReadDeviceInfo();
+
         foreach (var gpu in snapshot.Gpus)
         {
+            var deviceInfo = deviceInfos.FirstOrDefault(d => d.Index == gpu.Index);
+            var gpuName = deviceInfo?.Name ?? $"GPU {gpu.Index}";
+
             AddSectionHeader(panel, $"GPU {gpu.Index} Metrics");
 
+            // Hero strip — untitled card (the GPU name is the first body line, so a card title
+            // would just repeat it).
+            var heroCard = BuildCard();
+            heroCard.Name = $"gpu{gpu.Index}_hero_card";
+
+            heroCard.AddControl(new MarkupBuilder()
+                .WithName($"gpu{gpu.Index}_hero_markup")
+                .AddLine($"[{UIConstants.Accent.ToMarkup()} bold]{gpuName}[/]")
+                .AddLine(HeroVitals(gpu))
+                .Build());
+            panel.AddControl(heroCard);
+
+            AddSectionSeparator(panel);
+
             // Utilization
-            panel.AddControl(new BarGraphBuilder()
+            var utilCard = BuildCard($"Utilization — {gpu.UtilizationPercent:F0}%");
+            utilCard.Name = $"gpu{gpu.Index}_util_card";
+            utilCard.AddControl(new BarGraphBuilder()
                 .WithName($"gpu{gpu.Index}_util_bar")
-                .WithLabel("Util")
-                .WithLabelWidth(8)
                 .WithValue(gpu.UtilizationPercent)
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .ShowLabel().ShowValue()
-                .WithSmoothGradient(UIConstants.SparkCpuTotal)
+                .WithLabel(IconUtil).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .ShowValue()
                 .Build());
-            panel.AddControl(new SparklineBuilder()
+            utilCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
+            utilCard.AddControl(new SparklineBuilder()
                 .WithName($"gpu{gpu.Index}_util_spark")
-                .WithHeight(6)
+                .WithHeight(_sparklineHeight)
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
@@ -74,24 +195,26 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMargin(0, 0, 1, 0)
                 .WithData(_histories.Get($"{gpu.Index}_util"))
                 .Build());
+            panel.AddControl(utilCard);
 
             AddSectionSeparator(panel);
 
             // Memory
-            panel.AddControl(new BarGraphBuilder()
+            var memCard = BuildCard($"Memory — {gpu.MemoryUsedPercent:F0}%");
+            memCard.Name = $"gpu{gpu.Index}_mem_card";
+            memCard.AddControl(new BarGraphBuilder()
                 .WithName($"gpu{gpu.Index}_mem_bar")
-                .WithLabel("Mem")
-                .WithLabelWidth(8)
                 .WithValue(gpu.MemoryUsedPercent)
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .ShowLabel().ShowValue()
-                .WithSmoothGradient(UIConstants.SparkMemUsed)
+                .WithLabel(IconMem).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .ShowValue()
                 .Build());
-            panel.AddControl(new SparklineBuilder()
+            memCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
+            memCard.AddControl(new SparklineBuilder()
                 .WithName($"gpu{gpu.Index}_mem_spark")
-                .WithHeight(6)
+                .WithHeight(_sparklineHeight)
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
@@ -100,24 +223,26 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMargin(0, 0, 1, 0)
                 .WithData(_histories.Get($"{gpu.Index}_mem"))
                 .Build());
+            panel.AddControl(memCard);
 
             AddSectionSeparator(panel);
 
             // Temperature
-            panel.AddControl(new BarGraphBuilder()
+            var tempCard = BuildCard($"Temperature — {gpu.TemperatureC:F0}°C");
+            tempCard.Name = $"gpu{gpu.Index}_temp_card";
+            tempCard.AddControl(new BarGraphBuilder()
                 .WithName($"gpu{gpu.Index}_temp_bar")
-                .WithLabel("Temp")
-                .WithLabelWidth(8)
                 .WithValue(gpu.TemperatureC)
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .ShowLabel().ShowValue()
-                .WithSmoothGradient(UIConstants.SparkCpuTotal)
+                .WithLabel(IconTemp).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .ShowValue()
                 .Build());
-            panel.AddControl(new SparklineBuilder()
+            tempCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
+            tempCard.AddControl(new SparklineBuilder()
                 .WithName($"gpu{gpu.Index}_temp_spark")
-                .WithHeight(6)
+                .WithHeight(_sparklineHeight)
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
@@ -126,24 +251,26 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMargin(0, 0, 1, 0)
                 .WithData(_histories.Get($"{gpu.Index}_temp"))
                 .Build());
+            panel.AddControl(tempCard);
 
             AddSectionSeparator(panel);
 
             // Power
-            panel.AddControl(new BarGraphBuilder()
+            var powerCard = BuildCard($"Power — {gpu.PowerDrawWatts:F0}W");
+            powerCard.Name = $"gpu{gpu.Index}_power_card";
+            powerCard.AddControl(new BarGraphBuilder()
                 .WithName($"gpu{gpu.Index}_power_bar")
-                .WithLabel("Power")
-                .WithLabelWidth(8)
                 .WithValue(gpu.PowerDrawWatts)
                 .WithMaxValue(gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : 100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .ShowLabel().ShowValue()
-                .WithSmoothGradient(UIConstants.SparkCpuTotal)
+                .WithLabel(IconPower).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .ShowValue()
                 .Build());
-            panel.AddControl(new SparklineBuilder()
+            powerCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
+            powerCard.AddControl(new SparklineBuilder()
                 .WithName($"gpu{gpu.Index}_power_spark")
-                .WithHeight(6)
+                .WithHeight(_sparklineHeight)
                 .WithMaxValue(gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : 100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
@@ -152,24 +279,26 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMargin(0, 0, 1, 0)
                 .WithData(_histories.Get($"{gpu.Index}_power"))
                 .Build());
+            panel.AddControl(powerCard);
 
             AddSectionSeparator(panel);
 
             // Fan Speed
-            panel.AddControl(new BarGraphBuilder()
+            var fanCard = BuildCard($"Fan — {gpu.FanSpeedPercent:F0}%");
+            fanCard.Name = $"gpu{gpu.Index}_fan_card";
+            fanCard.AddControl(new BarGraphBuilder()
                 .WithName($"gpu{gpu.Index}_fan_bar")
-                .WithLabel("Fan")
-                .WithLabelWidth(8)
                 .WithValue(gpu.FanSpeedPercent)
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .ShowLabel().ShowValue()
-                .WithSmoothGradient(UIConstants.SparkCpuTotal)
+                .WithLabel(IconFan).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .ShowValue()
                 .Build());
-            panel.AddControl(new SparklineBuilder()
+            fanCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
+            fanCard.AddControl(new SparklineBuilder()
                 .WithName($"gpu{gpu.Index}_fan_spark")
-                .WithHeight(6)
+                .WithHeight(_sparklineHeight)
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
@@ -178,8 +307,8 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMargin(0, 0, 1, 0)
                 .WithData(_histories.Get($"{gpu.Index}_fan"))
                 .Build());
-
-            AddSectionSeparator(panel);
+            panel.AddControl(fanCard);
+            // No trailing separator after the last card — it would leave a stray line at the bottom.
         }
     }
 
@@ -200,38 +329,91 @@ internal class OverviewTab : BaseResponsiveTab
         var panel = FindGraphPanel(grid);
         if (panel == null) return;
 
+        var deviceInfos = Stats.ReadDeviceInfo();
+
         foreach (var gpu in snapshot.Gpus)
         {
-            // Update BarGraphs
-            if (panel.Children.TryFind<BarGraphControl>(c => c.Name == $"gpu{gpu.Index}_util_bar", out var uBar) && uBar != null)
-                uBar.Value = gpu.UtilizationPercent;
+            var deviceInfo = deviceInfos.FirstOrDefault(d => d.Index == gpu.Index);
+            var gpuName = deviceInfo?.Name ?? $"GPU {gpu.Index}";
 
-            if (panel.Children.TryFind<BarGraphControl>(c => c.Name == $"gpu{gpu.Index}_mem_bar", out var mBar) && mBar != null)
-                mBar.Value = gpu.MemoryUsedPercent;
+            // Update Hero (untitled card; content in the inner markup only)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_hero_card", out var hCard) && hCard != null)
+            {
+                if (FindControlRecursive<MarkupControl>(hCard, $"gpu{gpu.Index}_hero_markup", out var hMarkup) && hMarkup != null)
+                {
+                    hMarkup.SetContent(new List<string> {
+                        $"[{UIConstants.Accent.ToMarkup()} bold]{gpuName}[/]",
+                        HeroVitals(gpu)
+                    });
+                }
+            }
 
-            if (panel.Children.TryFind<BarGraphControl>(c => c.Name == $"gpu{gpu.Index}_temp_bar", out var tBar) && tBar != null)
-                tBar.Value = gpu.TemperatureC;
+            // Update Cards (Header) and BarGraphs (Value + Color)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_util_card", out var uCard) && uCard != null)
+            {
+                uCard.Header = CardHeaderMarkup($"Utilization — {gpu.UtilizationPercent:F0}%");
+                if (FindControlRecursive<BarGraphControl>(uCard, $"gpu{gpu.Index}_util_bar", out var uBar) && uBar != null)
+                {
+                    uBar.Value = gpu.UtilizationPercent;
+                    uBar.FilledColor = UIConstants.ThresholdColor(gpu.UtilizationPercent);
+                }
+            }
 
-            if (panel.Children.TryFind<BarGraphControl>(c => c.Name == $"gpu{gpu.Index}_power_bar", out var pBar) && pBar != null)
-                pBar.Value = gpu.PowerDrawWatts;
+            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_mem_card", out var mCard) && mCard != null)
+            {
+                mCard.Header = CardHeaderMarkup($"Memory — {gpu.MemoryUsedPercent:F0}%");
+                if (FindControlRecursive<BarGraphControl>(mCard, $"gpu{gpu.Index}_mem_bar", out var mBar) && mBar != null)
+                {
+                    mBar.Value = gpu.MemoryUsedPercent;
+                    mBar.FilledColor = UIConstants.ThresholdColor(gpu.MemoryUsedPercent);
+                }
+            }
 
-            if (panel.Children.TryFind<BarGraphControl>(c => c.Name == $"gpu{gpu.Index}_fan_bar", out var fBar) && fBar != null)
-                fBar.Value = gpu.FanSpeedPercent;
+            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_temp_card", out var tCard) && tCard != null)
+            {
+                tCard.Header = CardHeaderMarkup($"Temperature — {gpu.TemperatureC:F0}°C");
+                if (FindControlRecursive<BarGraphControl>(tCard, $"gpu{gpu.Index}_temp_bar", out var tBar) && tBar != null)
+                {
+                    tBar.Value = gpu.TemperatureC;
+                    tBar.FilledColor = UIConstants.ThresholdColor(gpu.TemperatureC);
+                }
+            }
 
-            // Update Sparklines
-            if (panel.Children.TryFind<SparklineControl>(c => c.Name == $"gpu{gpu.Index}_util_spark", out var uSpark) && uSpark != null)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_power_card", out var pCard) && pCard != null)
+            {
+                pCard.Header = CardHeaderMarkup($"Power — {gpu.PowerDrawWatts:F0}W");
+                if (FindControlRecursive<BarGraphControl>(pCard, $"gpu{gpu.Index}_power_bar", out var pBar) && pBar != null)
+                {
+                    pBar.Value = gpu.PowerDrawWatts;
+                    double powerPercent = gpu.PowerLimitWatts > 0 ? (gpu.PowerDrawWatts / gpu.PowerLimitWatts) * 100.0 : 0.0;
+                    pBar.FilledColor = UIConstants.ThresholdColor(powerPercent);
+                }
+            }
+
+            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_fan_card", out var fCard) && fCard != null)
+            {
+                fCard.Header = CardHeaderMarkup($"Fan — {gpu.FanSpeedPercent:F0}%");
+                if (FindControlRecursive<BarGraphControl>(fCard, $"gpu{gpu.Index}_fan_bar", out var fBar) && fBar != null)
+                {
+                    fBar.Value = gpu.FanSpeedPercent;
+                    fBar.FilledColor = UIConstants.ThresholdColor(gpu.FanSpeedPercent);
+                }
+            }
+
+            // Update Sparklines (they are children of the cards)
+            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_util_spark", out var uSpark) && uSpark != null)
                 uSpark.SetDataPoints(_histories.Get($"{gpu.Index}_util"));
 
-            if (panel.Children.TryFind<SparklineControl>(c => c.Name == $"gpu{gpu.Index}_mem_spark", out var mSpark) && mSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_mem_spark", out var mSpark) && mSpark != null)
                 mSpark.SetDataPoints(_histories.Get($"{gpu.Index}_mem"));
 
-            if (panel.Children.TryFind<SparklineControl>(c => c.Name == $"gpu{gpu.Index}_temp_spark", out var tSpark) && tSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_temp_spark", out var tSpark) && tSpark != null)
                 tSpark.SetDataPoints(_histories.Get($"{gpu.Index}_temp"));
 
-            if (panel.Children.TryFind<SparklineControl>(c => c.Name == $"gpu{gpu.Index}_power_spark", out var pSpark) && pSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_power_spark", out var pSpark) && pSpark != null)
                 pSpark.SetDataPoints(_histories.Get($"{gpu.Index}_power"));
 
-            if (panel.Children.TryFind<SparklineControl>(c => c.Name == $"gpu{gpu.Index}_fan_spark", out var fSpark) && fSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_fan_spark", out var fSpark) && fSpark != null)
                 fSpark.SetDataPoints(_histories.Get($"{gpu.Index}_fan"));
         }
     }
@@ -247,26 +429,29 @@ internal class OverviewTab : BaseResponsiveTab
             Name = PanelControlName,
             VerticalAlignment = VerticalAlignment.Fill,
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Margin = new Margin(1, 0, 1, 1),
+            Margin = new Margin(0, 0, 0, 0),
             BackgroundColor = UIConstants.BaseBg,
             ForegroundColor = UIConstants.PrimaryText
         };
 
         if (layoutMode == ResponsiveLayoutMode.Wide)
         {
-            // 3 columns: Text (fixed, sized to content), Separator (fixed), Graphs (Star = rest).
-            // The text readout has a bounded max width, so give it a FIXED column and let the
-            // graphs take ALL the remaining space via Star — a proportional text column would
-            // waste width on a 200-col terminal. (Do NOT use Auto here: the text panel is
-            // Stretch-aligned, so Auto would report its desired width as the whole row and
-            // starve the graphs column to zero width / invisible.)
-            grid.ColumnDefinitions.Add(GridLength.Cells(UIConstants.FixedTextColumnWidth));
+            // Left column sized to the spec-sheet's actual content. Auto() can't size to a
+            // ScrollablePanel (it's a scrolling viewport that fills its space), so we MEASURE the
+            // built lines with MarkupParser.StripLength (true display width, markup stripped) and
+            // set a fixed width from that + padding. The graphs take the rest via Star.
+            var leftLines = BuildTextContent(initialSnapshot);
+            int leftWidth = MeasureMaxWidth(leftLines) + LeftColumnPadding + 1;  // +1 for the left gutter margin
+
+            grid.ColumnDefinitions.Add(GridLength.Cells(leftWidth));
             grid.ColumnDefinitions.Add(GridLength.Cells(UIConstants.SeparatorColumnWidth));
             grid.ColumnDefinitions.Add(GridLength.Star(1.0));
             grid.RowDefinitions.Add(GridLength.Star(1.0));
 
             var leftPanel = BuildScrollablePanel();
-            AddMarkupLines(leftPanel, BuildTextContent(initialSnapshot));
+            leftPanel.BackgroundColor = UIConstants.LeftPanelBg;
+            leftPanel.Padding = new Padding(1, 0, 0, 0);   // 1-col left gutter INSIDE the tinted bg
+            AddMarkupLines(leftPanel, leftLines);
 
             var separator = new SeparatorControl { ForegroundColor = UIConstants.SeparatorColor, VerticalAlignment = VerticalAlignment.Fill };
 
@@ -280,7 +465,6 @@ internal class OverviewTab : BaseResponsiveTab
         }
         else
         {
-            // 1 column: Everything
             grid.ColumnDefinitions.Add(GridLength.Star(1.0));
             grid.RowDefinitions.Add(GridLength.Star(1.0));
 
@@ -295,21 +479,24 @@ internal class OverviewTab : BaseResponsiveTab
 
         return grid;
     }
-}
 
-// Helper to find control by name in a list of children
-public static class ControlExtensions
-{
-    public static bool TryFind<T>(this IEnumerable<IWindowControl> children, Func<IWindowControl, bool> predicate, out T? result) where T : class
+    private bool FindControlRecursive<T>(IWindowControl root, string name, out T? result) where T : class
     {
-        foreach (var child in children)
+        if (root is T t && root.Name == name)
         {
-            if (predicate(child) && child is T t)
+            result = t;
+            return true;
+        }
+
+        if (root is IContainerControl container)
+        {
+            foreach (var child in container.GetChildren())
             {
-                result = t;
-                return true;
+                if (FindControlRecursive<T>(child, name, out result))
+                    return true;
             }
         }
+
         result = null;
         return false;
     }

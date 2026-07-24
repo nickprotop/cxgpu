@@ -16,7 +16,13 @@ internal sealed class CxnvmonConfig
     public const int MaxRefreshIntervalMs = 5000;
     public const int DefaultRefreshIntervalMs = 1000;
 
+    // Sparkline height (rows) for the Overview cards.
+    public const int MinSparklineHeight = 2;
+    public const int MaxSparklineHeight = 12;
+    public const int DefaultSparklineHeight = 5;
+
     public int RefreshIntervalMs { get; set; } = DefaultRefreshIntervalMs;
+    public int SparklineHeight { get; set; } = DefaultSparklineHeight;
     public bool ShowOverviewTab { get; set; } = true;
     public bool ShowProcessesTab { get; set; } = true;
     public bool ShowDetailsTab { get; set; } = true;
@@ -99,6 +105,7 @@ internal sealed class CxnvmonConfig
     public CxnvmonConfig Clamped() => new()
     {
         RefreshIntervalMs = Math.Clamp(RefreshIntervalMs, MinRefreshIntervalMs, MaxRefreshIntervalMs),
+        SparklineHeight = Math.Clamp(SparklineHeight, MinSparklineHeight, MaxSparklineHeight),
         ShowOverviewTab = ShowOverviewTab,
         ShowProcessesTab = ShowProcessesTab,
         ShowDetailsTab = ShowDetailsTab,

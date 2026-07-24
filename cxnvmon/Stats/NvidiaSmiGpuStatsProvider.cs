@@ -18,12 +18,18 @@ internal class NvidiaSmiGpuStatsProvider : IGpuStatsProvider
                 var parts = line.Split(',');
                 if (parts.Length < 11) continue;
 
+                // NOTE: parts[2] is utilization.memory (memory-controller activity %, ~0% at idle),
+                // NOT the fraction of VRAM in use. The real "memory used %" is memory.used/total.
+                var memUsedMb = double.Parse(parts[3].Trim(), CultureInfo.InvariantCulture);
+                var memTotalMb = double.Parse(parts[4].Trim(), CultureInfo.InvariantCulture);
+                var memUsedPercent = memTotalMb > 0 ? memUsedMb / memTotalMb * 100.0 : 0.0;
+
                 gpuSamples.Add(new GpuSample(
                     Index: int.Parse(parts[0].Trim()),
                     UtilizationPercent: double.Parse(parts[1].Trim(), CultureInfo.InvariantCulture),
-                    MemoryUsedPercent: double.Parse(parts[2].Trim(), CultureInfo.InvariantCulture),
-                    MemoryUsedMb: double.Parse(parts[3].Trim(), CultureInfo.InvariantCulture),
-                    MemoryTotalMb: double.Parse(parts[4].Trim(), CultureInfo.InvariantCulture),
+                    MemoryUsedPercent: memUsedPercent,
+                    MemoryUsedMb: memUsedMb,
+                    MemoryTotalMb: memTotalMb,
                     TemperatureC: double.Parse(parts[5].Trim(), CultureInfo.InvariantCulture),
                     PowerDrawWatts: double.Parse(parts[6].Trim(), CultureInfo.InvariantCulture),
                     PowerLimitWatts: double.Parse(parts[7].Trim(), CultureInfo.InvariantCulture),
