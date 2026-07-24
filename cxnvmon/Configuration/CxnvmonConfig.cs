@@ -23,6 +23,7 @@ internal sealed class CxnvmonConfig
 
     public int RefreshIntervalMs { get; set; } = DefaultRefreshIntervalMs;
     public int SparklineHeight { get; set; } = DefaultSparklineHeight;
+    public bool ShowTimeAxis { get; set; } = true;
     public bool ShowOverviewTab { get; set; } = true;
     public bool ShowProcessesTab { get; set; } = true;
     public bool ShowDetailsTab { get; set; } = true;
@@ -106,6 +107,7 @@ internal sealed class CxnvmonConfig
     {
         RefreshIntervalMs = Math.Clamp(RefreshIntervalMs, MinRefreshIntervalMs, MaxRefreshIntervalMs),
         SparklineHeight = Math.Clamp(SparklineHeight, MinSparklineHeight, MaxSparklineHeight),
+        ShowTimeAxis = ShowTimeAxis,
         ShowOverviewTab = ShowOverviewTab,
         ShowProcessesTab = ShowProcessesTab,
         ShowDetailsTab = ShowDetailsTab,

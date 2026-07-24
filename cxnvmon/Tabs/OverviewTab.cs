@@ -19,11 +19,51 @@ internal class OverviewTab : BaseResponsiveTab
     private readonly KeyedHistoryTracker<string> _histories = new(200);
 
     private readonly int _sparklineHeight;
+    private readonly double _refreshSeconds;
+    private readonly bool _showTimeAxis;
 
     public OverviewTab(ConsoleWindowSystem windowSystem, IGpuStatsProvider stats, Configuration.CxnvmonConfig config)
         : base(windowSystem, stats)
     {
         _sparklineHeight = config.SparklineHeight;
+        _refreshSeconds = config.RefreshIntervalMs / 1000.0;
+        _showTimeAxis = config.ShowTimeAxis;
+    }
+
+    // X-axis provider for the history sparklines: turns the graph geometry into time-delta ticks
+    // (e.g. "-2m", "-1m", "now"), right-anchored at the newest sample. Picks a round tick interval
+    // that fits the span so labels stay readable and don't overlap.
+    private IEnumerable<SharpConsoleUI.Controls.SparklineAxisTick> TimeAxisTicks(
+        SharpConsoleUI.Controls.SparklineAxisContext ctx)
+    {
+        var ticks = new List<SharpConsoleUI.Controls.SparklineAxisTick>();
+        if (ctx.PointCount <= 1 || ctx.UnitsPerPoint <= 0) return ticks;
+
+        double totalSeconds = (ctx.PointCount - 1) * ctx.UnitsPerPoint;
+        // Candidate round intervals (seconds); pick the smallest that yields <= ~5 ticks.
+        int[] steps = { 10, 15, 30, 60, 120, 300, 600, 1800, 3600 };
+        double stepSec = steps[^1];
+        foreach (var s in steps) { if (totalSeconds / s <= 5) { stepSec = s; break; } }
+
+        var muted = UIConstants.MutedText;
+        // Walk back from "now" (right edge) in stepSec increments.
+        for (double ago = 0; ago <= totalSeconds + 0.001; ago += stepSec)
+        {
+            int idx = ctx.PointCount - 1 - (int)Math.Round(ago / ctx.UnitsPerPoint);
+            if (idx < 0) break;
+            string label = ago <= 0.001 ? "now" : "-" + FormatDelta(ago);
+            ticks.Add(new SharpConsoleUI.Controls.SparklineAxisTick(idx, $"[{muted.ToMarkup()}]{label}[/]", muted));
+        }
+        return ticks;
+    }
+
+    // Seconds -> compact delta: "45s", "2m", "1m30s", "1h".
+    private static string FormatDelta(double seconds)
+    {
+        int s = (int)Math.Round(seconds);
+        if (s < 60) return $"{s}s";
+        if (s < 3600) { int m = s / 60, r = s % 60; return r == 0 ? $"{m}m" : $"{m}m{r}s"; }
+        int h = s / 3600, mm = (s % 3600) / 60; return mm == 0 ? $"{h}h" : $"{h}h{mm}m";
     }
 
     // Metric icons — plain Unicode/emoji (NOT Nerd Font). SharpConsoleUI handles wide glyphs
@@ -190,6 +230,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
+                .WithXAxis(_showTimeAxis ? TimeAxisTicks : null, _refreshSeconds)
                 .WithGradient(UIConstants.SparkCpuTotal)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithMargin(0, 0, 1, 0)
@@ -218,6 +259,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
+                .WithXAxis(_showTimeAxis ? TimeAxisTicks : null, _refreshSeconds)
                 .WithGradient(UIConstants.SparkMemUsed)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithMargin(0, 0, 1, 0)
@@ -246,6 +288,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
+                .WithXAxis(_showTimeAxis ? TimeAxisTicks : null, _refreshSeconds)
                 .WithGradient(UIConstants.SparkCpuTotal)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithMargin(0, 0, 1, 0)
@@ -274,6 +317,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : 100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
+                .WithXAxis(_showTimeAxis ? TimeAxisTicks : null, _refreshSeconds)
                 .WithGradient(UIConstants.SparkCpuTotal)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithMargin(0, 0, 1, 0)
@@ -302,6 +346,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
+                .WithXAxis(_showTimeAxis ? TimeAxisTicks : null, _refreshSeconds)
                 .WithGradient(UIConstants.SparkCpuTotal)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithMargin(0, 0, 1, 0)

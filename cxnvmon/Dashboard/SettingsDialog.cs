@@ -23,6 +23,7 @@ internal static class SettingsDialog
     // Form field keys.
     private const string KeyRefresh = "refresh";
     private const string KeySparkHeight = "sparkheight";
+    private const string KeyTimeAxis = "timeaxis";
     private const string KeyOverview = "overview";
     private const string KeyProcesses = "processes";
     private const string KeyDetails = "details";
@@ -52,6 +53,7 @@ internal static class SettingsDialog
                 CxnvmonConfig.MinSparklineHeight, CxnvmonConfig.MaxSparklineHeight,
                 current.SparklineHeight,
                 hint: $"{CxnvmonConfig.MinSparklineHeight}–{CxnvmonConfig.MaxSparklineHeight} rows (restart to apply)")
+            .AddCheckbox(KeyTimeAxis, "Show time axis on graphs", current.ShowTimeAxis)
             .AddSection("Tabs")
             .AddCheckbox(KeyOverview, "Show Overview tab", current.ShowOverviewTab)
             .AddCheckbox(KeyProcesses, "Show Processes tab", current.ShowProcessesTab)
@@ -92,6 +94,7 @@ internal static class SettingsDialog
         {
             RefreshIntervalMs = ParseInt(values, KeyRefresh, current.RefreshIntervalMs),
             SparklineHeight = ParseInt(values, KeySparkHeight, current.SparklineHeight),
+            ShowTimeAxis = ParseBool(values, KeyTimeAxis, current.ShowTimeAxis),
             ShowOverviewTab = ParseBool(values, KeyOverview, current.ShowOverviewTab),
             ShowProcessesTab = ParseBool(values, KeyProcesses, current.ShowProcessesTab),
             ShowDetailsTab = ParseBool(values, KeyDetails, current.ShowDetailsTab),
