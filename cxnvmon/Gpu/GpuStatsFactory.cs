@@ -48,6 +48,30 @@ internal static class GpuStatsFactory
     }
 
     /// <summary>
+    /// A vendor cxnvmon knows how to read, whether or not it is present or enabled on this machine.
+    /// </summary>
+    /// <param name="Name">Stable identifier, matching <see cref="GpuBackendInfo.Name"/> and the config key.</param>
+    /// <param name="IsEnabled">Reads the per-vendor toggle from config.</param>
+    /// <param name="Create">Builds an unprobed instance, for reading its declared settings.</param>
+    internal sealed record KnownBackend(
+        string Name,
+        Func<Configuration.CxnvmonConfig, bool> IsEnabled,
+        Func<IGpuBackend> Create);
+
+    /// <summary>
+    /// Every vendor the app can read, independent of what actually probed.
+    ///
+    /// The settings UI needs this rather than the registry's active list: a backend that is disabled or
+    /// absent still has to appear, or there would be no way to switch one on. The registry only knows
+    /// what succeeded.
+    /// </summary>
+    public static IReadOnlyList<KnownBackend> KnownBackends { get; } = new[]
+    {
+        new KnownBackend("NVIDIA", c => c.EnableNvidiaBackend, () => new NvidiaBackend()),
+        new KnownBackend("AMD", c => c.EnableAmdBackend, () => new AmdBackend()),
+    };
+
+    /// <summary>
     /// Feeds a backend its stored settings BEFORE it is probed. Order matters: the AMD reader choice
     /// decides which mechanism probing even attempts, so applying settings afterwards would leave the
     /// setting with no effect until the next restart.
