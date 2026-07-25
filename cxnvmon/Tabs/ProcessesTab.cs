@@ -82,21 +82,123 @@ internal class ProcessesTab : BaseResponsiveTab
             ForegroundColor = UIConstants.PrimaryText
         };
 
+        // Seed the GPU filter from the Overview's selection, so arriving here shows the card the user
+        // was just looking at. From then on the toolbar owns the scope — it can express "All GPUs",
+        // which the Overview's single-selection cannot.
+        if (_gpuFilter == null && _isMultiGpu())
+            _gpuFilter = _selectedGpuIndex();
+
         grid.ColumnDefinitions.Add(GridLength.Star(1.0));
-        grid.RowDefinitions.Add(GridLength.Auto());   // header row
+        grid.RowDefinitions.Add(GridLength.Auto());    // toolbar
+        grid.RowDefinitions.Add(GridLength.Auto());    // column header
         grid.RowDefinitions.Add(GridLength.Star(1.0)); // tree
 
-        // Place(control, ROW, COL, rowSpan, colSpan) — header on row 0, tree on row 1, both in col 0.
-        grid.Place(BuildHeader(), 0, 0, 1, 1);
-        grid.Place(BuildTree(initialSnapshot), 1, 0, 1, 1);
+        // Place(control, ROW, COL, rowSpan, colSpan).
+        grid.Place(BuildToolbar(initialSnapshot), 0, 0, 1, 1);
+        grid.Place(BuildHeader(), 1, 0, 1, 1);
+        grid.Place(BuildTree(initialSnapshot), 2, 0, 1, 1);
 
         return grid;
     }
+
+    #region Toolbar
+
+    private const string GpuFilterName = "processesGpuFilter";
+    private const string SortSelectorName = "processesSort";
+
+    // Dropdown option order must match the enum's, since selection arrives as an index.
+    private static readonly (string Label, ProcessSort Sort)[] SortOptions =
+    {
+        ("GPU mem", ProcessSort.Memory),
+        ("SM %", ProcessSort.Sm),
+        ("PID", ProcessSort.Pid),
+        ("Name", ProcessSort.Name)
+    };
+
+    /// <summary>
+    /// A toolbar above the table: which GPU to show, and how to order it. Built from the live snapshot
+    /// so the GPU list names real devices ("GPU 1 · AMD …") rather than bare indices — with several
+    /// vendors present, an index alone doesn't say which card it is.
+    /// </summary>
+    private IWindowControl BuildToolbar(GpuSnapshot snapshot)
+    {
+        var deviceInfos = Stats.ReadDeviceInfo();
+
+        var gpuFilter = Controls.Dropdown()
+            .WithName(GpuFilterName)
+            .WithPrompt("GPU:")
+            .WithWidth(28);
+
+        // "All" first, so index 0 is always the unfiltered view regardless of GPU count.
+        gpuFilter.AddItem("All GPUs");
+        foreach (var gpu in snapshot.Gpus)
+        {
+            var name = deviceInfos.FirstOrDefault(d => d.Index == gpu.Index)?.Name;
+            gpuFilter.AddItem(string.IsNullOrWhiteSpace(name)
+                ? $"GPU {gpu.Index}"
+                : $"GPU {gpu.Index} · {Truncate(name, 16)}");
+        }
+
+        gpuFilter
+            .SelectedIndex(FilterToDropdownIndex(snapshot))
+            .OnSelectionChanged((_, index) =>
+            {
+                // Index 0 is "All"; the rest map positionally onto the snapshot's GPUs.
+                _gpuFilter = index <= 0 || index - 1 >= snapshot.Gpus.Count
+                    ? null
+                    : snapshot.Gpus[index - 1].Index;
+                RefreshTree();
+            });
+
+        var sortSelector = Controls.Dropdown()
+            .WithName(SortSelectorName)
+            .WithPrompt("Sort:")
+            .WithWidth(18)
+            .AddItems(SortOptions.Select(o => o.Label).ToArray())
+            .SelectedIndex(Array.FindIndex(SortOptions, o => o.Sort == _sort))
+            .OnSelectionChanged((_, index) =>
+            {
+                if (index >= 0 && index < SortOptions.Length)
+                    _sort = SortOptions[index].Sort;
+                RefreshTree();
+            });
+
+        return Controls.Toolbar()
+            .WithName("processesToolbar")
+            .WithSpacing(2)
+            // Below-line, not above: the rule should sit between the toolbar and the table it governs,
+            // so the eye reads controls → rule → data.
+            .WithBelowLine(true)
+            .WithBelowLineColor(UIConstants.SeparatorColor)
+            .Add(gpuFilter.Build())
+            .Add(sortSelector.Build())
+            .Build();
+    }
+
+    // Maps the current filter back to a dropdown index (0 = All, otherwise position + 1).
+    private int FilterToDropdownIndex(GpuSnapshot snapshot)
+    {
+        if (_gpuFilter is not int index) return 0;
+        var position = snapshot.Gpus.ToList().FindIndex(g => g.Index == index);
+        return position < 0 ? 0 : position + 1;
+    }
+
+    // Re-populates the tree in place after a toolbar change, so the new filter/order shows at once
+    // rather than on the next refresh tick.
+    private void RefreshTree()
+    {
+        if (_tree == null) return;
+        var snapshot = _latestSnapshot ?? Stats.ReadSnapshot();
+        PopulateTree(_tree, snapshot);
+    }
+
+    #endregion
 
     #region Column layout
 
     // Column widths, in display cells. The collapsed row is composed as one fixed-width string, which
     // is what keeps the columns aligned inside a tree (the control itself has no column concept).
+    private const int GpuColWidth = 5;
     private const int PidWidth = 6;
     private const int NameWidth = 28;
     private const int MemWidth = 9;
@@ -112,7 +214,7 @@ internal class ProcessesTab : BaseResponsiveTab
     private IWindowControl BuildHeader()
     {
         var muted = UIConstants.MutedText.ToMarkup();
-        var head = $"{HeaderPad}{"PID",PidWidth}  {"NAME",-NameWidth}{"GPU MEM",MemWidth}  {"SM%",PctWidth}";
+        var head = $"{HeaderPad}{"GPU",-GpuColWidth}{"PID",PidWidth}  {"NAME",-NameWidth}{"GPU MEM",MemWidth}  {"SM%",PctWidth}";
         if (WideColumns)
             head += $"{"MEM%",PctWidth}{"ENC%",PctWidth}{"DEC%",PctWidth}";
 
@@ -125,14 +227,34 @@ internal class ProcessesTab : BaseResponsiveTab
 
     #endregion
 
-    // The processes shown: scoped to the selected GPU when there's more than one (attributed via
-    // gpu_uuid), ordered by memory — the field operators actually sort by.
+    /// <summary>How the process list is ordered. Memory first — it is what operators scan for.</summary>
+    private enum ProcessSort { Memory, Sm, Pid, Name }
+
+    private ProcessSort _sort = ProcessSort.Memory;
+
+    // Which GPU to show, as a global index; null means "all GPUs". Distinct from the Overview's
+    // selection: the toolbar makes the scope explicit and adds an all-GPUs view the Overview cannot
+    // express, so this tab owns its own filter once the toolbar exists.
+    private int? _gpuFilter;
+
+    // The processes shown: filtered to one GPU (or all), then sorted. Ties break on PID so the order
+    // is stable between ticks — otherwise equal-memory rows would swap places and the cursor would
+    // appear to drift.
     private List<GpuProcessSample> VisibleProcesses(GpuSnapshot snapshot)
     {
         IEnumerable<GpuProcessSample> procs = snapshot.Processes;
-        if (_isMultiGpu())
-            procs = procs.Where(p => p.GpuIndex == _selectedGpuIndex());
-        return procs.OrderByDescending(p => p.MemoryUsedMb).ToList();
+
+        if (_gpuFilter is int index)
+            procs = procs.Where(p => p.GpuIndex == index);
+
+        return _sort switch
+        {
+            ProcessSort.Sm => procs.OrderByDescending(p => p.SmPercent ?? -1).ThenBy(p => p.Pid).ToList(),
+            ProcessSort.Pid => procs.OrderBy(p => p.Pid).ToList(),
+            ProcessSort.Name => procs.OrderBy(p => ShortenPath(p.Name), StringComparer.OrdinalIgnoreCase)
+                                     .ThenBy(p => p.Pid).ToList(),
+            _ => procs.OrderByDescending(p => p.MemoryUsedMb).ThenBy(p => p.Pid).ToList()
+        };
     }
 
     // Capabilities of the GPU whose processes are being shown, so the empty state can distinguish
@@ -140,9 +262,11 @@ internal class ProcessesTab : BaseResponsiveTab
     private GpuCapabilities? SelectedGpuCapabilities(GpuSnapshot snapshot)
     {
         if (snapshot.Gpus.Count == 0) return null;
-        if (!_isMultiGpu()) return snapshot.Gpus[0].Caps;
+        // With no filter ("All GPUs") there is no single owning backend, so fall back to the first
+        // card's capabilities — the actions it gates are per-row anyway, and the empty-state wording
+        // only needs to be right when a specific GPU is in view.
+        if (_gpuFilter is not int index) return snapshot.Gpus[0].Caps;
 
-        var index = _selectedGpuIndex();
         return (snapshot.Gpus.FirstOrDefault(g => g.Index == index) ?? snapshot.Gpus[0]).Caps;
     }
 
@@ -167,6 +291,9 @@ internal class ProcessesTab : BaseResponsiveTab
         var muted = UIConstants.MutedText.ToMarkup();
 
         var row =
+            // The GPU a process belongs to. Previously implicit — the tab showed one GPU's processes
+            // with nothing on screen saying which — and essential once "All GPUs" is selectable.
+            $"[{muted}]{proc.GpuIndex.ToString().PadRight(GpuColWidth)}[/]" +
             $"[{text}]{proc.Pid,PidWidth}[/]  " +
             $"[{text}]{Truncate(ShortenPath(proc.Name), NameWidth),-NameWidth}[/]" +
             $"[{muted}]{proc.MemoryUsedMb,MemWidth:F0}[/]  " +
@@ -261,7 +388,7 @@ internal class ProcessesTab : BaseResponsiveTab
 
         if (procs.Count == 0)
         {
-            var scope = _isMultiGpu() ? $" on GPU {_selectedGpuIndex()}" : "";
+            var scope = _gpuFilter is int gpuIndex ? $" on GPU {gpuIndex}" : "";
 
             // "None running" and "we cannot tell" are different claims, and only the capability
             // distinguishes them: reading AMD through the rocm-smi CLI yields no per-process data at

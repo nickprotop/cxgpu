@@ -65,13 +65,25 @@ internal static class SettingsDialog
         panel.AddControl(Controls.RuleBuilder().WithMargin(1, 0, 1, 0).Build());
         panel.AddControl(form);
 
+        Window? dialogRef = null;
         var dialog = new WindowBuilder(windowSystem)
             .WithTitle("Settings")
             .WithSize(DialogWidth, DialogHeight)
             .Centered()
             .AsModal()
             .AddControls(panel, hint)
+            // Esc must close the dialog AND consume the key. The form's own Cancelled event does not
+            // fire for it here, and the main window binds Esc to Shutdown — so without this, pressing
+            // Esc in Settings either did nothing or would quit the app. Same fix as the process
+            // signal/confirm dialogs and the help overlay.
+            .OnKeyPressed((_, e) =>
+            {
+                if (e.KeyInfo.Key != ConsoleKey.Escape) return;
+                if (dialogRef != null) windowSystem.CloseWindow(dialogRef);
+                e.Handled = true;
+            })
             .BuildAndShow();
+        dialogRef = dialog;
 
         form.Cancelled += (_, _) => windowSystem.CloseWindow(dialog);
         form.Submitted += (_, values) =>
