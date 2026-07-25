@@ -126,7 +126,7 @@ jobs:
           body: |
             # cxgpu ${{ steps.version.outputs.VERSION }}
 
-            ntop/btop-inspired terminal system monitor built with SharpConsoleUI.
+            A multi-vendor GPU monitor for the terminal — NVIDIA and AMD — built with SharpConsoleUI.
 
             ## Installation
 
