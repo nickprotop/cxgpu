@@ -1,16 +1,16 @@
 #!/bin/bash
-# cxnvmon Installer
+# cxgpu Installer
 # Downloads and installs the latest release from GitHub
-# Usage: curl -fsSL https://raw.githubusercontent.com/nickprotop/cxnvmon/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/nickprotop/cxgpu/main/install.sh | bash
 # Copyright (c) Nikolaos Protopapas. All rights reserved.
 # Licensed under the MIT License.
 
 set -e
 
-REPO="nickprotop/cxnvmon"
+REPO="nickprotop/cxgpu"
 INSTALL_DIR="$HOME/.local/bin"
 
-echo "Installing cxnvmon..."
+echo "Installing cxgpu..."
 
 # Detect OS and architecture
 OS=$(uname -s)
@@ -19,21 +19,21 @@ ARCH=$(uname -m)
 case "$OS" in
     Linux)
         case "$ARCH" in
-            x86_64)  BINARY="cxnvmon-linux-x64" ;;
-            aarch64) BINARY="cxnvmon-linux-arm64" ;;
+            x86_64)  BINARY="cxgpu-linux-x64" ;;
+            aarch64) BINARY="cxgpu-linux-arm64" ;;
             *) echo "Error: Unsupported Linux architecture: $ARCH"; exit 1 ;;
         esac
         ;;
     Darwin)
         case "$ARCH" in
-            x86_64)  BINARY="cxnvmon-osx-x64" ;;
-            arm64)   BINARY="cxnvmon-osx-arm64" ;;
+            x86_64)  BINARY="cxgpu-osx-x64" ;;
+            arm64)   BINARY="cxgpu-osx-arm64" ;;
             *) echo "Error: Unsupported macOS architecture: $ARCH"; exit 1 ;;
         esac
         ;;
     *)
         echo "Error: Unsupported OS: $OS"
-        echo "cxnvmon supports Linux and macOS. For Windows, download from GitHub Releases."
+        echo "cxgpu supports Linux and macOS. For Windows, download from GitHub Releases."
         exit 1
         ;;
 esac
@@ -56,12 +56,12 @@ DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$BINARY"
 echo "Downloading $BINARY..."
 
 mkdir -p "$INSTALL_DIR"
-curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/cxnvmon"
-chmod +x "$INSTALL_DIR/cxnvmon"
+curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/cxgpu"
+chmod +x "$INSTALL_DIR/cxgpu"
 
 # Download uninstaller
-curl -fsSL "https://raw.githubusercontent.com/$REPO/main/uninstall.sh" -o "$INSTALL_DIR/cxnvmon-uninstall.sh"
-chmod +x "$INSTALL_DIR/cxnvmon-uninstall.sh"
+curl -fsSL "https://raw.githubusercontent.com/$REPO/main/uninstall.sh" -o "$INSTALL_DIR/cxgpu-uninstall.sh"
+chmod +x "$INSTALL_DIR/cxgpu-uninstall.sh"
 
 # Ensure PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
@@ -82,13 +82,13 @@ fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  ✓ cxnvmon v$VERSION installed!"
+echo "  ✓ cxgpu v$VERSION installed!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "  Binary:  $INSTALL_DIR/cxnvmon"
+echo "  Binary:  $INSTALL_DIR/cxgpu"
 echo ""
-echo "  Run:     cxnvmon"
-echo "  Remove:  cxnvmon-uninstall.sh"
+echo "  Run:     cxgpu"
+echo "  Remove:  cxgpu-uninstall.sh"
 echo ""
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo "  Note: Restart your shell or run:"

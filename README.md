@@ -1,4 +1,4 @@
-# cxnvmon
+# cxgpu
 
 <div align="center">
 
@@ -13,11 +13,11 @@
 
 <div align="center">
 
-### ⭐ If you find cxnvmon useful, please consider giving it a star! ⭐
+### ⭐ If you find cxgpu useful, please consider giving it a star! ⭐
 
 It helps others discover the project and motivates continued development.
 
-[![GitHub stars](https://img.shields.io/github/stars/nickprotop/cxnvmon?style=for-the-badge&logo=github&color=yellow)](https://github.com/nickprotop/cxnvmon/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/nickprotop/cxgpu?style=for-the-badge&logo=github&color=yellow)](https://github.com/nickprotop/cxgpu/stargazers)
 
 </div>
 
@@ -27,35 +27,35 @@ details — for **NVIDIA and AMD**, side by side in the same view.
 
 **Monitor your GPUs. Right in the terminal.**
 
-![cxnvmon Overview](.github/screenshot.png)
+![cxgpu Overview](.github/screenshot.png)
 
 ## Quick Start
 
 **Option 1: One-line install** (Linux, no .NET required)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nickprotop/cxnvmon/main/install.sh | bash
-cxnvmon
+curl -fsSL https://raw.githubusercontent.com/nickprotop/cxgpu/main/install.sh | bash
+cxgpu
 ```
 
 **Windows** (PowerShell)
 ```powershell
-irm https://raw.githubusercontent.com/nickprotop/cxnvmon/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/nickprotop/cxgpu/main/install.ps1 | iex
 ```
 
 **Option 2: Build from source** (requires .NET 9)
 ```bash
-git clone https://github.com/nickprotop/cxnvmon.git
-cd cxnvmon
+git clone https://github.com/nickprotop/cxgpu.git
+cd cxgpu
 ./build-and-install.sh
-cxnvmon
+cxgpu
 ```
 
-No GPU to hand? `cxnvmon --demo` runs against simulated GPUs — useful for trying the multi-GPU
+No GPU to hand? `cxgpu --demo` runs against simulated GPUs — useful for trying the multi-GPU
 views on a single-GPU machine, or with no GPU driver at all.
 
 ## Supported hardware
 
-cxnvmon probes for each vendor at startup and shows whichever it finds — including both at once on a
+cxgpu probes for each vendor at startup and shows whichever it finds — including both at once on a
 hybrid machine. A vendor that isn't present is simply absent; nothing errors.
 
 | Vendor | Source | Platform |
@@ -67,7 +67,7 @@ hybrid machine. A vendor that isn't present is simply absent; nothing errors.
 The AMD backend needs **no extra tooling and no root** on Linux — it reads the kernel directly, which
 is both faster than a CLI and the only source that can attribute memory to individual processes.
 
-> **Metrics differ by vendor, and cxnvmon says so rather than guessing.** Each backend declares what
+> **Metrics differ by vendor, and cxgpu says so rather than guessing.** Each backend declares what
 > it can measure, and anything it can't is **omitted** — never shown as a zero. An APU with no fan
 > sensor shows no fan gauge; a source that can't attribute per-process usage says
 > "not available" instead of "no processes".
@@ -91,7 +91,7 @@ becomes a fleet view: aggregate totals on the left (combined VRAM, combined draw
 total processes, anything throttling) and a hero panel per GPU on the right. Double-click a panel to
 jump into that GPU's detail.
 
-![cxnvmon Dashboard](.github/screenshot-dashboard.png)
+![cxgpu Dashboard](.github/screenshot-dashboard.png)
 
 ### Processes — who is using the GPU
 
@@ -99,7 +99,7 @@ An expandable tree of GPU processes with a toolbar to filter by GPU (or show **a
 and sort by memory, SM%, PID or name. Expand a row for the full command path and live per-process
 detail; from there you can send **SIGTERM** or **SIGKILL**, with a confirmation on the latter.
 
-![cxnvmon Processes](.github/screenshot-processes.png)
+![cxgpu Processes](.github/screenshot-processes.png)
 
 Outcomes are reported honestly: "permission denied — it belongs to another user" and "already
 exited" are distinct messages, not a generic failure.
@@ -139,10 +139,10 @@ Status-bar hints and GPU tiles are clickable; double-clicking a dashboard panel 
 ## Command Line
 
 ```
-cxnvmon [options]
+cxgpu [options]
 
   --demo[=N]      Run against N simulated GPUs (default 4, max 9) instead of
-                  real hardware. Also settable via CXNVMON_FAKE_GPUS=N.
+                  real hardware. Also settable via CXGPU_FAKE_GPUS=N.
   -h, --help      Show help and exit.
   -v, --version   Show the version and exit.
 ```
@@ -151,8 +151,8 @@ cxnvmon [options]
 
 Settings live as JSON at the platform config location:
 
-- **Linux:** `~/.config/cxnvmon/config.json` (honours `XDG_CONFIG_HOME`)
-- **Windows:** `%APPDATA%\cxnvmon\config.json`
+- **Linux:** `~/.config/cxgpu/config.json` (honours `XDG_CONFIG_HOME`)
+- **Windows:** `%APPDATA%\cxgpu\config.json`
 
 Edit them in-app with **F9**. The dialog is paged: refresh interval, graph options, tab visibility,
 and a page per GPU backend where you can enable or disable that vendor and change its options — for
@@ -167,9 +167,9 @@ GPU access sits behind one seam. Each vendor is a **backend** that declares its 
 settings, so adding a vendor doesn't touch the UI.
 
 ```
-cxnvmon/
+cxgpu/
 ├── Program.cs                    # Entry point, CLI parsing
-├── Configuration/                # CxnvmonConfig (JSON load/save)
+├── Configuration/                # CxgpuConfig (JSON load/save)
 ├── Gpu/
 │   ├── Abstractions/             # Models, IGpuBackend, capabilities, plugin settings
 │   ├── GpuBackendRegistry.cs     # Probes backends, aggregates, assigns global GPU indices
@@ -190,7 +190,7 @@ framework gains runtime assembly loading, they become drop-in without a refactor
 
 ## Building from Source
 
-cxnvmon uses a conditional project reference for [SharpConsoleUI](https://github.com/nickprotop/ConsoleEx):
+cxgpu uses a conditional project reference for [SharpConsoleUI](https://github.com/nickprotop/ConsoleEx):
 
 - **Local development:** if ConsoleEx is cloned as a sibling directory (`../ConsoleEx`), the project
   reference is used automatically
@@ -199,10 +199,10 @@ cxnvmon uses a conditional project reference for [SharpConsoleUI](https://github
 ```bash
 # Clone both repos as siblings
 git clone https://github.com/nickprotop/ConsoleEx.git
-git clone https://github.com/nickprotop/cxnvmon.git
+git clone https://github.com/nickprotop/cxgpu.git
 
-cd cxnvmon
-dotnet build cxnvmon.csproj
+cd cxgpu
+dotnet build cxgpu.csproj
 ```
 
 **Key Technologies:** .NET 9, [SharpConsoleUI](https://github.com/nickprotop/ConsoleEx), `nvidia-smi`,
@@ -212,12 +212,12 @@ Linux `sysfs`/`hwmon`, `amd-smi`/`rocm-smi`
 
 **Linux/macOS:**
 ```bash
-cxnvmon-uninstall.sh
+cxgpu-uninstall.sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-& "$env:LOCALAPPDATA\cxnvmon\cxnvmon-uninstall.ps1"
+& "$env:LOCALAPPDATA\cxgpu\cxgpu-uninstall.ps1"
 ```
 
 ## License

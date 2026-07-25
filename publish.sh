@@ -1,5 +1,5 @@
 #!/bin/bash
-# cxnvmon Release Publisher
+# cxgpu Release Publisher
 # Bumps version and creates a new release tag that triggers GitHub Actions
 # Copyright (c) Nikolaos Protopapas. All rights reserved.
 # Licensed under the MIT License.
@@ -62,7 +62,7 @@ NEW_TAG="v$NEW_VERSION"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  cxnvmon Release: $NEW_TAG"
+echo "  cxgpu Release: $NEW_TAG"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Previous: $LATEST_TAG"
 echo "  New:      $NEW_TAG ($BUMP_TYPE)"
@@ -81,7 +81,7 @@ echo ""
 echo "✓ Release $NEW_TAG published!"
 echo ""
 echo "GitHub Actions will build and create the release:"
-echo "  https://github.com/nickprotop/cxnvmon/actions"
+echo "  https://github.com/nickprotop/cxgpu/actions"
 echo ""
 echo "Release will be at:"
-echo "  https://github.com/nickprotop/cxnvmon/releases/tag/$NEW_TAG"
+echo "  https://github.com/nickprotop/cxgpu/releases/tag/$NEW_TAG"

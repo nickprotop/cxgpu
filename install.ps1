@@ -1,20 +1,20 @@
-# cxnvmon Installer for Windows
-# Usage: irm https://raw.githubusercontent.com/nickprotop/cxnvmon/main/install.ps1 | iex
+# cxgpu Installer for Windows
+# Usage: irm https://raw.githubusercontent.com/nickprotop/cxgpu/main/install.ps1 | iex
 # Copyright (c) Nikolaos Protopapas. All rights reserved.
 # Licensed under the MIT License.
 
 $ErrorActionPreference = "Stop"
 
-$repo = "nickprotop/cxnvmon"
-$installDir = "$env:LOCALAPPDATA\cxnvmon"
+$repo = "nickprotop/cxgpu"
+$installDir = "$env:LOCALAPPDATA\cxgpu"
 
-Write-Host "Installing cxnvmon..." -ForegroundColor Cyan
+Write-Host "Installing cxgpu..." -ForegroundColor Cyan
 
 # Detect architecture
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
 switch ($arch) {
-    "X64"   { $binary = "cxnvmon-win-x64.exe" }
-    "Arm64" { $binary = "cxnvmon-win-arm64.exe" }
+    "X64"   { $binary = "cxgpu-win-x64.exe" }
+    "Arm64" { $binary = "cxgpu-win-arm64.exe" }
     default {
         Write-Host "Error: Unsupported architecture: $arch" -ForegroundColor Red
         exit 1
@@ -39,12 +39,12 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 # Download binary
 Write-Host "Downloading $binary..."
-$outputPath = Join-Path $installDir "cxnvmon.exe"
+$outputPath = Join-Path $installDir "cxgpu.exe"
 Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $outputPath
 
 # Download uninstaller
 $uninstallUrl = "https://raw.githubusercontent.com/$repo/main/uninstall.ps1"
-$uninstallPath = Join-Path $installDir "cxnvmon-uninstall.ps1"
+$uninstallPath = Join-Path $installDir "cxgpu-uninstall.ps1"
 Invoke-WebRequest -Uri $uninstallUrl -OutFile $uninstallPath
 
 # Add to PATH if not already there
@@ -56,12 +56,12 @@ if ($userPath -notlike "*$installDir*") {
 
 Write-Host ""
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-Write-Host "  cxnvmon v$version installed!" -ForegroundColor Green
+Write-Host "  cxgpu v$version installed!" -ForegroundColor Green
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Binary:  $outputPath"
 Write-Host ""
-Write-Host "  Run:     cxnvmon"
-Write-Host "  Remove:  cxnvmon-uninstall.ps1"
+Write-Host "  Run:     cxgpu"
+Write-Host "  Remove:  cxgpu-uninstall.ps1"
 Write-Host ""
 Write-Host "  Note: Restart your terminal for PATH changes to take effect." -ForegroundColor Yellow

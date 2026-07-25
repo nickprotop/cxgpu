@@ -1,25 +1,25 @@
 #!/bin/bash
-# cxnvmon Uninstaller
-# Removes cxnvmon binary
+# cxgpu Uninstaller
+# Removes cxgpu binary
 # Copyright (c) Nikolaos Protopapas. All rights reserved.
 # Licensed under the MIT License.
 
 INSTALL_DIR="$HOME/.local/bin"
 
-echo "cxnvmon Uninstaller"
+echo "cxgpu Uninstaller"
 echo ""
 
 # Remove binary
-if [ -f "$INSTALL_DIR/cxnvmon" ]; then
-    rm "$INSTALL_DIR/cxnvmon"
-    echo "✓ Removed $INSTALL_DIR/cxnvmon"
+if [ -f "$INSTALL_DIR/cxgpu" ]; then
+    rm "$INSTALL_DIR/cxgpu"
+    echo "✓ Removed $INSTALL_DIR/cxgpu"
 else
-    echo "  Binary not found at $INSTALL_DIR/cxnvmon"
+    echo "  Binary not found at $INSTALL_DIR/cxgpu"
 fi
 
 # Remove uninstaller
-if [ -f "$INSTALL_DIR/cxnvmon-uninstall.sh" ]; then
-    rm "$INSTALL_DIR/cxnvmon-uninstall.sh"
+if [ -f "$INSTALL_DIR/cxgpu-uninstall.sh" ]; then
+    rm "$INSTALL_DIR/cxgpu-uninstall.sh"
 fi
 
 # Clean PATH from shell config
@@ -32,4 +32,4 @@ for RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
 done
 
 echo ""
-echo "✓ cxnvmon uninstalled."
+echo "✓ cxgpu uninstalled."

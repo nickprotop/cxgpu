@@ -1,5 +1,5 @@
 #!/bin/bash
-# cxnvmon Local Build & Install
+# cxgpu Local Build & Install
 # Builds from source and installs to ~/.local/bin
 # Copyright (c) Nikolaos Protopapas. All rights reserved.
 # Licensed under the MIT License.
@@ -20,10 +20,10 @@ esac
 VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
 VERSION="${VERSION#v}"
 
-echo "Building cxnvmon v$VERSION for $RID..."
+echo "Building cxgpu v$VERSION for $RID..."
 
 # Build
-dotnet publish cxnvmon.csproj \
+dotnet publish cxgpu.csproj \
     -c Release \
     -r "$RID" \
     --self-contained true \
@@ -35,11 +35,11 @@ dotnet publish cxnvmon.csproj \
 mkdir -p "$INSTALL_DIR"
 
 # Install binary
-cp "./publish/$RID/cxnvmon" "$INSTALL_DIR/cxnvmon"
-chmod +x "$INSTALL_DIR/cxnvmon"
+cp "./publish/$RID/cxgpu" "$INSTALL_DIR/cxgpu"
+chmod +x "$INSTALL_DIR/cxgpu"
 
 echo ""
-echo "✓ Installed cxnvmon to $INSTALL_DIR/cxnvmon"
+echo "✓ Installed cxgpu to $INSTALL_DIR/cxgpu"
 
 # Ensure PATH includes ~/.local/bin
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
@@ -60,4 +60,4 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
 fi
 
 echo ""
-echo "Run: cxnvmon"
+echo "Run: cxgpu"
