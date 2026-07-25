@@ -39,7 +39,7 @@ internal class OverviewTab : BaseResponsiveTab
     ///
     /// Negative because real indices are non-negative, so it can never collide with a card.
     /// </summary>
-    private const int DashboardIndex = -1;
+    private const int DashboardIndex = GpuStrip.DashboardIndex;
 
     /// <summary>The nvidia-smi index of the GPU currently shown in the Overview detail.</summary>
     public int SelectedGpuIndex => _selectedGpuIndex;
@@ -47,16 +47,15 @@ internal class OverviewTab : BaseResponsiveTab
     /// <summary>Whether the dashboard (fleet) view is showing rather than a single GPU's detail.</summary>
     private bool DashboardSelected => _selectedGpuIndex == DashboardIndex;
 
-    // Utilization history per GPU for the dashboard panels' trailing gauges. Separate from _histories,
-    // which is keyed by metric name for the single-GPU cards.
-    private readonly KeyedHistoryTracker<int> _fleetHistories = new(120);
+    // The GPU selector strip and the fleet dashboard it leads to. Both own the state that belongs to
+    // them — the strip its click hit-test spans, the grid its per-GPU history — so this tab keeps only
+    // the selection itself, which is what both of them are about.
+    private readonly GpuStrip _strip;
+    private readonly GpuFleetGrid _fleetGrid;
 
-    // Click hit-test spans for the summary-strip tiles: display column range [Start, End) on tile
-    // Row -> GPU index. Rebuilt every time the strip is composed, because tile widths depend on the
-    // live values ("100%" is wider than "0%") and the row breaks depend on the current width.
-    private readonly List<(int Start, int End, int GpuIndex, int Row)> _tileSpans = new();
-
-    // Width the strip was last laid out for, so live updates re-wrap identically to the build.
+    // Width the strip was last laid out for, so live updates re-wrap identically to the build. Owned
+    // here rather than by the strip because it is a layout input the tab computes: the fleet grid
+    // wraps its panels against the same width.
     private int _stripWidth = 80;
 
     // Columns a card consumes around its content, subtracted when computing the strip's usable
@@ -77,6 +76,18 @@ internal class OverviewTab : BaseResponsiveTab
         _refreshSeconds = config.RefreshIntervalMs / 1000.0;
         _showTimeAxis = config.ShowTimeAxis;
         _runBusy = runBusy;
+
+        // The strip reads the selection through a callback rather than being handed a value, so it can
+        // never render a selection the tab has already moved past.
+        _strip = new GpuStrip(
+            // Uses SelectedGpu's fallback so the highlighted tile matches the GPU whose detail is
+            // actually being shown; -2 means "no tile" for an empty snapshot.
+            selectedIndex: snapshot => DashboardSelected
+                ? DashboardIndex
+                : (SelectedGpu(snapshot)?.Index ?? -2),
+            selectGpu: SelectGpu);
+
+        _fleetGrid = new GpuFleetGrid(focusGpu: gpuIndex => SelectGpu(gpuIndex));
     }
 
     // Resolves the GPU whose detail should be shown. Falls back to the first GPU when the selected
@@ -301,191 +312,6 @@ internal class OverviewTab : BaseResponsiveTab
             markup.SetContent(BuildTextContent(snapshot));
     }
 
-    // Gap between tiles, in display columns. Two columns of card background between slabs, so the
-    // slabs read as separate objects rather than one continuous band.
-    private const string TileGap = "  ";
-
-    // Tile enclosures: inward-pointing angle quotes (U+2039/203A) on EVERY tile, so each one reads as
-    // the same enclosed control and the difference between them is state rather than shape. Selection
-    // is carried by colour — full accent on the selected pair, a heavily muted accent on the rest —
-    // together with the lifted background slab.
-    //
-    // These must not be "[" or "]": the width used for click hit-testing comes from
-    // MarkupParser.StripLength, which parses those as the start of a markup tag and would measure the
-    // tile short, drifting every click span. The angle quotes carry no markup meaning and are
-    // single-width (verified), so they cannot shift the columns.
-    private const string TileOpen = "‹";
-    private const string TileClose = "›";
-
-    // Builds the tile rows and (re)records the click hit-test spans. The selected tile is marked
-    // with a leading "▌" bar and bright/bold text; unselected tiles are muted, so the selection
-    // reads at a glance without relying on a background fill (which the tinted panel bg would
-    // fight with).
-    //
-    // Tiles WRAP onto additional rows when they don't fit the available width: on a narrow terminal
-    // (or with many GPUs) a single row would clip the last tiles, and a fleet view that hides part
-    // of the fleet is worse than useless. Spans are recorded per row so click hit-testing stays
-    // correct on wrapped rows.
-    private List<string> BuildStripLines(GpuSnapshot snapshot, int availableWidth)
-    {
-        _tileSpans.Clear();
-
-        var muted = UIConstants.MutedText.ToMarkup();
-        var accent = UIConstants.Accent.ToMarkup();
-        // When the dashboard is selected, no GPU tile is — hence the sentinel rather than falling back
-        // to a card.
-        var selectedIndex = DashboardSelected ? DashboardIndex : (SelectedGpu(snapshot)?.Index ?? -2);
-
-        var rows = new List<string>();
-        var sb = new System.Text.StringBuilder();
-        int column = 0;
-        int row = 0;
-
-        // The DASHBOARD chip leads the strip: it is the fleet view, so it reads before the individual
-        // cards, and putting it first keeps its position stable however many GPUs come and go.
-        {
-            bool selected = DashboardSelected;
-            string plain = $"{TileOpen}DASH {snapshot.Gpus.Count} GPUs{TileClose}";
-            int width = SharpConsoleUI.Parsing.MarkupParser.StripLength(plain);
-
-            var slab = (selected ? UIConstants.TileSelectedBg : UIConstants.TileBg).ToMarkup();
-            var enclosure = selected ? $"{accent} bold" : UIConstants.TileBracket.ToMarkup();
-            var labelColor = selected ? accent : UIConstants.PrimaryText.ToMarkup();
-
-            sb.Append($"[{UIConstants.PrimaryText.ToMarkup()} on {slab}]");
-            sb.Append($"[{enclosure}]{TileOpen}[/]");
-            sb.Append($"[{labelColor} bold]DASH[/] ");
-            sb.Append($"[{muted}]{snapshot.Gpus.Count} GPUs[/]");
-            sb.Append($"[{enclosure}]{TileClose}[/]");
-            sb.Append("[/]");
-
-            _tileSpans.Add((column, column + width, DashboardIndex, row));
-            column += width;
-        }
-
-        foreach (var gpu in snapshot.Gpus)
-        {
-            bool selected = gpu.Index == selectedIndex;
-
-            // Tiles are FIXED-WIDTH with right-aligned numbers, so values line up column-wise across
-            // tiles. Ragged tiles were a big part of why the strip read as one undifferentiated run
-            // of text: with alignment, a hot GPU's digits sit directly under a cool one's.
-            string plain =
-                $"{TileOpen}GPU {gpu.Index}  " +
-                $"{GpuFormat.UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%  " +
-                $"m{gpu.MemoryUsedPercent,3:F0}%  t{gpu.TemperatureC,3:F0}°" +
-                $"{TileClose}";
-            int width = SharpConsoleUI.Parsing.MarkupParser.StripLength(plain);
-
-            // Wrap when this tile (plus its leading gap) would overflow. Never wrap the first tile
-            // of a row — an over-wide tile has to clip rather than loop forever.
-            if (column > 0 && column + TileGap.Length + width > availableWidth)
-            {
-                rows.Add(sb.ToString());
-                sb.Clear();
-                column = 0;
-                row++;
-            }
-
-            // The gap is plain card background — outside both slabs — so the eye reads two separate
-            // objects with space between them rather than one continuous band.
-            if (column > 0)
-            {
-                sb.Append(TileGap);
-                column += TileGap.Length;
-            }
-
-            // Each tile sits on its own background SLAB, which is what turns it from text-in-a-stream
-            // into a discrete object. Both slabs sit ABOVE the card background — a tile is clickable,
-            // and a raised surface reads as a control where a recessed one reads as inert. The selected
-            // slab is lifted further and its label accented.
-            //
-            // The tile is ENCLOSED, which closes it on both sides so its boundary is explicit rather
-            // than inferred from spacing, and gives the slab a defined edge to fill.
-            //
-            // Square brackets were tried first and abandoned: the tile's width is measured with
-            // MarkupParser.StripLength for click hit-testing, and that reads a literal "[" as the start
-            // of a markup tag — so bracketed tiles measured short and every click span drifted. These
-            // glyphs carry no markup meaning, so they measure as ordinary characters. All are
-            // single-width (checked), so none can shift the columns.
-            var slab = (selected ? UIConstants.TileSelectedBg : UIConstants.TileBg).ToMarkup();
-            var labelColor = selected ? accent : UIConstants.PrimaryText.ToMarkup();
-
-            // NOTE: the foreground is stated explicitly before "on" — a bare "[on <bg>]" tag takes a
-            // different parser branch and did not paint the slab in practice.
-            sb.Append($"[{UIConstants.PrimaryText.ToMarkup()} on {slab}]");
-            var enclosure = selected ? $"{accent} bold" : UIConstants.TileBracket.ToMarkup();
-            sb.Append($"[{enclosure}]{TileOpen}[/]");
-            sb.Append($"[{labelColor} bold]GPU {gpu.Index}[/]  ");
-            // Utilization gets a mini-bar: a pre-attentive height cue you can scan for "which one is
-            // hot" without reading any digits — the actual point of a fleet strip.
-            sb.Append($"[{UIConstants.ThresholdColor(gpu.UtilizationPercent).ToMarkup()} bold]" +
-                      $"{GpuFormat.UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%[/]  ");
-            // Mem/temp keep single-letter prefixes instead of icons: eight repeated emoji carried no
-            // distinguishing information and dominated the row visually.
-            sb.Append($"[{muted}]m[/][{UIConstants.ThresholdColor(gpu.MemoryUsedPercent).ToMarkup()}]{gpu.MemoryUsedPercent,3:F0}%[/]  ");
-            sb.Append($"[{muted}]t[/][{UIConstants.ThresholdColor(gpu.TemperatureC).ToMarkup()}]{gpu.TemperatureC,3:F0}°[/]");
-            sb.Append($"[{enclosure}]{TileClose}[/]");
-            sb.Append("[/]");
-
-            _tileSpans.Add((column, column + width, gpu.Index, row));
-            column += width;
-        }
-
-        if (sb.Length > 0 || rows.Count == 0)
-            rows.Add(sb.ToString());
-
-        return rows;
-    }
-
-    // The strip's second line: the key hints, so the selector documents itself.
-    private static string StripHintLine()
-    {
-        var muted = UIConstants.MutedText.ToMarkup();
-        var accent = UIConstants.Accent.ToMarkup();
-        return $"[{muted}]select GPU:[/] [{accent}][[[/] [{accent}]]][/] [{muted}]prev/next  ·[/] " +
-               $"[{accent}]1[/][{muted}]-[/][{accent}]9[/] [{muted}]direct  ·  click a tile[/]";
-    }
-
-    // The full strip content: the (possibly wrapped) tile rows followed by the hint line.
-    private List<string> StripContent(GpuSnapshot snapshot)
-    {
-        var lines = BuildStripLines(snapshot, _stripWidth);
-        lines.Add(StripHintLine());
-        return lines;
-    }
-
-    // Adds the summary strip as the first element of the graphs panel. Clicking a tile selects that
-    // GPU (hit-tested against the recorded tile spans).
-    private void BuildSummaryStrip(ScrollablePanelControl panel, GpuSnapshot snapshot)
-    {
-        if (snapshot.Gpus.Count <= 1) return;
-
-        var card = BuildCard();
-        card.Name = StripCardName;
-
-        var markup = new MarkupBuilder().WithName(StripMarkupName);
-        foreach (var line in StripContent(snapshot))
-            markup.AddLine(line);
-        var stripMarkup = markup.Build();
-
-        stripMarkup.MouseClick += (sender, e) =>
-        {
-            // Hit-test both the row and the column: tiles may wrap onto several rows, and the hint
-            // line (the row after the last tile row) is decoration, so it matches nothing.
-            foreach (var (start, end, gpuIndex, row) in _tileSpans)
-            {
-                if (e.Position.Y != row) continue;
-                if (e.Position.X < start || e.Position.X >= end) continue;
-                if (SelectGpu(gpuIndex)) e.Handled = true;
-                return;
-            }
-        };
-
-        card.AddControl(stripMarkup);
-        panel.AddControl(card);
-        AddSectionSeparator(panel);
-    }
 
     // Padding added to the measured spec-sheet width for the left column (breathing room before
     // the separator).
@@ -649,69 +475,6 @@ internal class OverviewTab : BaseResponsiveTab
         }
     }
 
-    #region Fleet grid (the DASH chip's view)
-
-    /// <summary>
-    /// One hero panel per GPU, wrapped into rows. Wrapping is done by GROUPING the GPUs and emitting one
-    /// horizontal grid per row — the grid itself has no wrapping, and this is how ServerHub's dashboard
-    /// does the same job.
-    /// </summary>
-    private void BuildFleetGrid(ScrollablePanelControl panel, GpuSnapshot snapshot,
-                                IReadOnlyList<GpuDeviceInfo> deviceInfos)
-    {
-        int perRow = Math.Max(1, _stripWidth / GpuHeroPanel.Width);
-
-        for (int start = 0; start < snapshot.Gpus.Count; start += perRow)
-        {
-            var row = Controls.HorizontalGrid()
-                .WithAlignment(HorizontalAlignment.Left)
-                .WithVerticalAlignment(VerticalAlignment.Top);
-
-            for (int i = start; i < Math.Min(start + perRow, snapshot.Gpus.Count); i++)
-            {
-                var gpu = snapshot.Gpus[i];
-                var name = deviceInfos.FirstOrDefault(d => d.Index == gpu.Index)?.Name ?? $"GPU {gpu.Index}";
-
-                // Panels are never "selected" here: the strip's chips carry selection, and a panel
-                // highlighted independently of them would give two competing answers to "which GPU?".
-                var heroPanel = GpuHeroPanel.Build(
-                    gpu, name, ProcessCountFor(snapshot, gpu.Index),
-                    _fleetHistories.Get(gpu.Index), selected: false);
-
-                WireFleetPanel(heroPanel, gpu.Index);
-
-                row.Column(col =>
-                {
-                    col.Width(GpuHeroPanel.Width);
-                    col.Add(heroPanel);
-                });
-            }
-
-            panel.AddControl(row.Build());
-        }
-    }
-
-    private static int ProcessCountFor(GpuSnapshot snapshot, int gpuIndex) =>
-        snapshot.Processes.Count(p => p.GpuIndex == gpuIndex);
-
-    /// <summary>
-    /// Double-click a panel to open that GPU's detail — which is just selecting its chip, so the strip
-    /// and the view can never disagree about which GPU is current.
-    ///
-    /// No single-click handler by design: selection belongs to the strip's chips, and a panel that
-    /// highlighted independently would be a second, competing notion of "current" for the user to
-    /// reconcile.
-    /// </summary>
-    private void WireFleetPanel(PanelControl panel, int gpuIndex)
-    {
-        panel.MouseDoubleClick += (_, e) =>
-        {
-            SelectGpu(gpuIndex);
-            e.Handled = true;
-        };
-    }
-
-    #endregion
 
     protected override void BuildGraphsContent(ScrollablePanelControl panel, GpuSnapshot snapshot)
     {
@@ -719,14 +482,20 @@ internal class OverviewTab : BaseResponsiveTab
 
         var deviceInfos = Stats.ReadDeviceInfo();
 
-        // Multi-GPU only: the fleet-at-a-glance strip, which is also the selector.
-        BuildSummaryStrip(panel, snapshot);
+        // Multi-GPU only: the fleet-at-a-glance strip, which is also the selector. Returns null for a
+        // single GPU, where a selector would be noise.
+        var stripCard = _strip.Build(snapshot, _stripWidth, () => BuildCard());
+        if (stripCard != null)
+        {
+            panel.AddControl(stripCard);
+            AddSectionSeparator(panel);
+        }
 
         // With the DASH chip selected, the right column becomes the fleet's hero-panel grid instead of
         // one GPU's cards. The strip stays above it either way — it is the selector for both.
         if (DashboardSelected)
         {
-            BuildFleetGrid(panel, snapshot, deviceInfos);
+            _fleetGrid.Build(panel, snapshot, deviceInfos, _stripWidth);
             return;
         }
 
@@ -912,12 +681,12 @@ internal class OverviewTab : BaseResponsiveTab
 
     protected override void UpdateHistory(GpuSnapshot snapshot)
     {
+        // Fleet gauge history for EVERY GPU, selected or not, so a panel already shows a trend the
+        // first time you look at the dashboard.
+        _fleetGrid.RecordHistory(snapshot);
+
         foreach (var gpu in snapshot.Gpus)
         {
-            // Fleet gauge history for EVERY GPU, selected or not, so a panel already shows a trend the
-            // first time you look at the dashboard.
-            _fleetHistories.Add(gpu.Index, gpu.UtilizationPercent);
-
             _histories.Add($"{gpu.Index}_util", gpu.UtilizationPercent);
             _histories.Add($"{gpu.Index}_mem", gpu.MemoryUsedPercent);
             _histories.Add($"{gpu.Index}_temp", gpu.TemperatureC);
@@ -934,10 +703,10 @@ internal class OverviewTab : BaseResponsiveTab
         var deviceInfos = Stats.ReadDeviceInfo();
 
         // The summary strip reflects ALL GPUs (it's the fleet view) and highlights the selected one.
-        if (snapshot.Gpus.Count > 1 &&
-            FindControlRecursive<MarkupControl>(panel, StripMarkupName, out var stripMarkup) && stripMarkup != null)
+        if (snapshot.Gpus.Count > 1)
         {
-            stripMarkup.SetContent(StripContent(snapshot));
+            _strip.Update(panel, snapshot, _stripWidth,
+                (root, name) => FindControlRecursive<MarkupControl>(root, name, out var m) ? m : null);
         }
 
         // While the dashboard shows, the cards below the strip do not exist — refresh the hero panels
@@ -955,8 +724,8 @@ internal class OverviewTab : BaseResponsiveTab
                 }
 
                 var heroName = fleetInfos.FirstOrDefault(d => d.Index == gpu.Index)?.Name ?? $"GPU {gpu.Index}";
-                GpuHeroPanel.Update(hero, gpu, heroName, ProcessCountFor(snapshot, gpu.Index),
-                    _fleetHistories.Get(gpu.Index), selected: false);
+                GpuHeroPanel.Update(hero, gpu, heroName, GpuFleetGrid.ProcessCountFor(snapshot, gpu.Index),
+                    _fleetGrid.HistoryFor(gpu.Index), selected: false);
             }
             return;
         }
