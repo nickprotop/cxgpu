@@ -1,4 +1,4 @@
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Identifies a GPU backend and the mechanism it is currently reading through.

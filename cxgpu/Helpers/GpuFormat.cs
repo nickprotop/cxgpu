@@ -1,4 +1,4 @@
-using cxgpu.Stats;
+using cxgpu.Gpu;
 
 namespace cxgpu.Helpers;
 

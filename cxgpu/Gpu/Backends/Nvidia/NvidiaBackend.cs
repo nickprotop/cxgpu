@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// NVIDIA GPU telemetry via the <c>nvidia-smi</c> CLI. Portable across Linux and Windows: the query

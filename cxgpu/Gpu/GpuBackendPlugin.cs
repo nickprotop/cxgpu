@@ -1,6 +1,6 @@
 using SharpConsoleUI.Plugins;
 
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Base class for a GPU backend that is also a SharpConsoleUI plugin.

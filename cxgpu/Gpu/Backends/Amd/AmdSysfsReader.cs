@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Reads AMD GPU telemetry straight from the Linux kernel: <c>/sys/class/drm/cardN/device</c> for

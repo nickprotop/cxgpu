@@ -1,4 +1,4 @@
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>The signal to deliver to a GPU process.</summary>
 internal enum GpuSignal

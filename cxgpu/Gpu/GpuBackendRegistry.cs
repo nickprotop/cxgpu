@@ -1,4 +1,4 @@
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Holds the GPU backends, probes them once, and presents their combined output as a single

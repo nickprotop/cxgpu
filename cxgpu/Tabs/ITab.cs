@@ -1,4 +1,4 @@
-using cxgpu.Stats;
+using cxgpu.Gpu;
 using SharpConsoleUI.Controls;
 
 namespace cxgpu.Tabs;

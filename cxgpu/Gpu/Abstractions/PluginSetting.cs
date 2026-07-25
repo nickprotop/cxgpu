@@ -1,4 +1,4 @@
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>The editor a setting needs, which decides the form control the host renders.</summary>
 internal enum PluginSettingKind

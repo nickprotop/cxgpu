@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Reads AMD GPU telemetry through the <c>amd-smi</c> / <c>rocm-smi</c> CLI.

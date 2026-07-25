@@ -1,5 +1,5 @@
 using cxgpu.Helpers;
-using cxgpu.Stats;
+using cxgpu.Gpu;
 using SharpConsoleUI;
 using SharpConsoleUI.Controls;
 using SharpConsoleUI.Layout;

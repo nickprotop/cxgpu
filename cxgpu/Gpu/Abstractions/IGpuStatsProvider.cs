@@ -1,6 +1,6 @@
-using cxgpu.Stats;
+using cxgpu.Gpu;
 
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Interface for collecting GPU statistics.

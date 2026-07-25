@@ -1,6 +1,6 @@
 using cxgpu.Configuration;
 using cxgpu.Dashboard;
-using cxgpu.Stats;
+using cxgpu.Gpu;
 using SharpConsoleUI;
 using SharpConsoleUI.Configuration;
 using SharpConsoleUI.Drivers;

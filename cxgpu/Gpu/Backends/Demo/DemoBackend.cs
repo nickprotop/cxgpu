@@ -1,4 +1,4 @@
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Synthetic GPU backend for exercising UI states real hardware cannot produce on demand: many GPUs

@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Factory for creating GPU statistics providers.

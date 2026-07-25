@@ -1,4 +1,4 @@
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// One way of reading AMD GPU telemetry. A vendor can be readable through several mechanisms — Linux

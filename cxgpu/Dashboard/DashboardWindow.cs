@@ -1,6 +1,6 @@
 using cxgpu.Configuration;
 using cxgpu.Helpers;
-using cxgpu.Stats;
+using cxgpu.Gpu;
 using cxgpu.Tabs;
 using SharpConsoleUI;
 using SharpConsoleUI.Animation;

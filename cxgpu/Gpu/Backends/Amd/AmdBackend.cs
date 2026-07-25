@@ -1,4 +1,4 @@
-namespace cxgpu.Stats;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// The AMD GPU backend — one plugin for the vendor, whichever mechanism ends up serving the data.

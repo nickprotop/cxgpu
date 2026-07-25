@@ -1,5 +1,5 @@
 using cxgpu.Helpers;
-using cxgpu.Stats;
+using cxgpu.Gpu;
 
 namespace cxgpu.Tabs;
 
