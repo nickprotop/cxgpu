@@ -83,4 +83,27 @@ internal record GpuDeviceInfo(
     // the numbers differ subtly between them — so "which source is live" has to be answerable
     // without attaching a debugger.
     string Backend = "",
-    string Mechanism = "");
+    string Mechanism = "",
+    // Stable per-card identity: the normalized PCI address ("0000:01:00.0").
+    //
+    // Index CANNOT serve this purpose — the registry reassigns indices globally, so a backend that
+    // fails to probe on one boot shifts every later card's index. Config keyed on index would then
+    // silently apply one card's settings to another.
+    //
+    // PCI over the vendor UUID because BOTH vendors expose it (UUID is NVIDIA-only, so a UUID key
+    // would need a second scheme for AMD), because it is already the AMD sysfs directory name, and
+    // because a human can check "0000:01:00.0" against lspci while a UUID is opaque. The tradeoff is
+    // that moving a card to another slot changes its key; for per-card thresholds that is arguably
+    // right, since slot-dependent behaviour is usually about airflow.
+    //
+    // "" when the backend cannot report one — a legitimate state that must fall through to vendor
+    // defaults, NOT match a "" config key.
+    string CardId = "",
+    // The vendor UUID where one exists. RECORDED ONLY — nothing looks a card up by this today.
+    //
+    // Kept because capturing it is nearly free (NVIDIA already runs the query that returns it) and it
+    // preserves a future option: recognising "same UUID, new PCI address" would let a later version
+    // migrate a config entry when a card moves slots, instead of silently reverting it to defaults.
+    // Adding a second lookup path now would require a rule for what happens when the two disagree;
+    // that belongs with the feature that needs it.
+    string CardUuid = "");

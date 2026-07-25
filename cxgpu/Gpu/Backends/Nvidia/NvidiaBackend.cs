@@ -189,7 +189,11 @@ internal class NvidiaBackend : GpuBackendPlugin, IGpuStatsProvider
     {
         try
         {
-            var deviceInfoData = RunNvidiaSmi("--query-gpu=index,name,driver_version,vbios_version,pcie.link.width.current,pcie.link.gen.current,memory.total,power.limit,temperature.gpu --format=csv,noheader,nounits");
+            // pci.bus_id and uuid are APPENDED to the existing field list: the parse below indexes
+            // parts positionally, so adding anything mid-list would silently shift every field after
+            // it. Verified live — pci.bus_id reads "00000000:01:00.0" and uuid "GPU-9370610d-...";
+            // note nvidia-smi's "serial" is [N/A] on consumer cards and is deliberately not used.
+            var deviceInfoData = RunNvidiaSmi("--query-gpu=index,name,driver_version,vbios_version,pcie.link.width.current,pcie.link.gen.current,memory.total,power.limit,temperature.gpu,pci.bus_id,uuid --format=csv,noheader,nounits");
             var deviceInfos = new List<GpuDeviceInfo>();
             var cuda = ReadCudaVersion();
 
@@ -207,7 +211,10 @@ internal class NvidiaBackend : GpuBackendPlugin, IGpuStatsProvider
                     CudaVersion: cuda,
                     MemoryTotalMb: ParseDouble(parts[6]),
                     PowerLimitWatts: ParseDouble(parts[7]),
-                    TemperatureLimitC: 0
+                    TemperatureLimitC: 0,
+                    // Backend/Mechanism are stamped on by the registry, not here.
+                    CardId: parts.Length > 9 ? GpuIdentity.NormalizePciAddress(parts[9]) : "",
+                    CardUuid: parts.Length > 10 ? parts[10].Trim() : ""
                 ));
             }
 

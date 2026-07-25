@@ -209,7 +209,11 @@ internal sealed class DemoBackend : GpuBackendPlugin, IGpuStatsProvider
                 CudaVersion: "13.2",
                 MemoryTotalMb: 24576,
                 PowerLimitWatts: 310,
-                TemperatureLimitC: 0));
+                TemperatureLimitC: 0,
+                // Synthetic but well-formed, so demo mode exercises the same per-card identity path
+                // as real hardware — including config lookup keyed on CardId.
+                CardId: GpuIdentity.NormalizePciAddress($"0000:ff:{i:x2}.0"),
+                CardUuid: $"GPU-demo{i:x4}-0000-0000-0000-000000000000"));
         }
         return infos;
     }

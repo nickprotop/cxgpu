@@ -392,6 +392,10 @@ internal class OverviewTab : BaseResponsiveTab
                 // sysfs or the rocm-smi CLI) and the readings differ subtly, so which one is live has
                 // to be answerable from the screen.
                 if (!string.IsNullOrWhiteSpace(d.Mechanism)) Row("Source", d.Mechanism);
+                // The PCI address. Shown because it is the key per-card settings are stored under, so
+                // a user editing config by hand can read it off the screen and check it against
+                // lspci. Omitted when the backend cannot report one, rather than shown empty.
+                if (!string.IsNullOrWhiteSpace(d.CardId)) Row("Bus", d.CardId);
             }
 
             Section("CLOCKS");

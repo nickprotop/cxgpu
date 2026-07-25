@@ -145,7 +145,10 @@ internal sealed class AmdSysfsReader : IAmdReader
                 CudaVersion: "",
                 MemoryTotalMb: vramTotal / (1024.0 * 1024.0),
                 PowerLimitWatts: ReadDouble(Path.Combine(hwmon ?? device, "power1_cap")) / 1_000_000.0 ?? 0,
-                TemperatureLimitC: 0));
+                TemperatureLimitC: 0,
+                CardId: PciAddress(device),
+                // amdgpu exposes no per-card UUID; "" is honest here. Config keys off CardId anyway.
+                CardUuid: ""));
         }
 
         return infos;
@@ -283,6 +286,27 @@ internal sealed class AmdSysfsReader : IAmdReader
     {
         var device = ReadText(Path.Combine(devicePath, "device"))?.Trim() ?? "";
         return device.Length > 0 ? $"AMD GPU {device}" : "AMD GPU";
+    }
+
+    /// <summary>
+    /// The card's PCI address, from the target of the <c>/sys/class/drm/cardN/device</c> symlink —
+    /// its basename IS the address ("0000:c6:00.0", verified on this box). Nothing needs parsing; the
+    /// kernel already names the directory after it.
+    ///
+    /// Returns "" when the link cannot be resolved, which callers treat as "no identity".
+    /// </summary>
+    private static string PciAddress(string devicePath)
+    {
+        try
+        {
+            var resolved = Path.GetFileName(Path.TrimEndingDirectorySeparator(
+                Directory.ResolveLinkTarget(devicePath, returnFinalTarget: true)?.FullName ?? ""));
+            return GpuIdentity.NormalizePciAddress(resolved);
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     /// <summary>Kernel release — the amdgpu driver ships with the kernel, so this is its version.</summary>

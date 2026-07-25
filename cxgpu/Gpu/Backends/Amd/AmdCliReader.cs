@@ -116,7 +116,11 @@ internal sealed class AmdCliReader : IAmdReader
 
     public IReadOnlyList<GpuDeviceInfo> ReadDeviceInfo()
     {
-        var cards = ReadCards("--showproductname --showdriverversion --showvbios --showmeminfo vram --json");
+        // --showbus rides along on the existing device-info query rather than spawning another
+        // process. Field name verified live against rocm-smi: {"card0": {"PCI Bus": "0000:C6:00.0"}}
+        // — note it reports UPPERCASE where sysfs reports lowercase, which is exactly the mismatch
+        // GpuIdentity.NormalizePciAddress exists to collapse.
+        var cards = ReadCards("--showproductname --showdriverversion --showvbios --showmeminfo vram --showbus --json");
         var infos = new List<GpuDeviceInfo>();
 
         // The driver version is reported under a "system" key rather than per card.
@@ -140,7 +144,9 @@ internal sealed class AmdCliReader : IAmdReader
                 CudaVersion: "",
                 MemoryTotalMb: (Number(c, "VRAM Total Memory (B)") ?? 0) / (1024.0 * 1024.0),
                 PowerLimitWatts: 0,
-                TemperatureLimitC: 0));
+                TemperatureLimitC: 0,
+                CardId: GpuIdentity.NormalizePciAddress(Text(c, "PCI Bus")),
+                CardUuid: ""));
         }
 
         return infos;
