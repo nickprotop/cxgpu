@@ -25,6 +25,13 @@ internal static class UIConstants
     // at 70% alpha (178/255) so the window gradient shows subtly through the sidebar.
     public static readonly Color LeftPanelBg = new(0x0e, 0x16, 0x20, 178);
     public static readonly Color CardBg = new(0x14, 0x1c, 0x28, 180);
+
+    // Multi-GPU summary-strip tiles. Each tile is a background slab so it reads as a discrete
+    // object instead of text in a stream: unselected slabs sit RECESSED (darker than CardBg) and the
+    // selected slab is LIFTED (lighter, nudged toward the cyan accent), which is what carries the
+    // selection at a glance — the "▌" marker alone was too small a cue.
+    public static readonly Color TileBg = new(0x10, 0x16, 0x20);
+    public static readonly Color TileSelectedBg = new(0x2b, 0x4a, 0x63);
     public static readonly Color SeparatorColor = new(0x1e, 0x2a, 0x3a);
     public static readonly Color PrimaryText = new(0xc8, 0xd4, 0xe0);
     public static readonly Color MutedText = new(0x4a, 0x60, 0x70);

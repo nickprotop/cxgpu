@@ -244,8 +244,32 @@ internal class OverviewTab : BaseResponsiveTab
             markup.SetContent(BuildTextContent(snapshot));
     }
 
-    // Gap between tiles, in display columns.
+    // Gap between tiles, in display columns. Two columns of card background between slabs, so the
+    // slabs read as separate objects rather than one continuous band.
     private const string TileGap = "  ";
+
+    // Braille dot-columns, empty through full, matching the sparklines' braille idiom so the strip's
+    // inline gauge belongs to the same visual family as the graphs below it. The levels fill from the
+    // BOTTOM up (⡀ → ⡄ → ⡆ → ⡇), and the empty cell is U+2800 BRAILLE PATTERN BLANK — a real blank,
+    // not a mid-height dot, which floated oddly against the bottom-anchored fills.
+    private static readonly char[] BrailleColumns = { '⠀', '⡀', '⡄', '⡆', '⡇' };
+
+    // Inline braille utilization gauge for a tile. Four cells x four dot-levels gives 16 steps over
+    // 0-100% — a pre-attentive height cue you can scan for "which GPU is hot" without reading digits.
+    private static string UtilBar(double percent)
+    {
+        const int cells = 4;
+        const int levels = 4;   // dot rows per braille cell
+        int filled = (int)Math.Round(Math.Clamp(percent, 0, 100) / 100.0 * (cells * levels));
+
+        var sb = new System.Text.StringBuilder(cells);
+        for (int i = 0; i < cells; i++)
+        {
+            int cellFill = Math.Clamp(filled - i * levels, 0, levels);
+            sb.Append(BrailleColumns[cellFill]);
+        }
+        return sb.ToString();
+    }
 
     // Builds the tile rows and (re)records the click hit-test spans. The selected tile is marked
     // with a leading "▌" bar and bright/bold text; unselected tiles are muted, so the selection
@@ -273,15 +297,14 @@ internal class OverviewTab : BaseResponsiveTab
         {
             bool selected = gpu.Index == selectedIndex;
 
-            // Compose the tile's plain text first so its true display width is measurable for the
-            // click hit-test (markup tags must not count toward columns).
-            string label = $"GPU {gpu.Index}";
-            string values =
-                $"{IconUtil} {gpu.UtilizationPercent:F0}% " +
-                $"{IconMem} {gpu.MemoryUsedPercent:F0}% " +
-                $"{IconTemp} {gpu.TemperatureC:F0}°C";
-            string marker = selected ? "▌" : " ";
-            int width = SharpConsoleUI.Parsing.MarkupParser.StripLength($"{marker}{label}  {values}");
+            // Tiles are FIXED-WIDTH with right-aligned numbers, so values line up column-wise across
+            // tiles. Ragged tiles were a big part of why the strip read as one undifferentiated run
+            // of text: with alignment, a hot GPU's digits sit directly under a cool one's.
+            string plain =
+                $"{(selected ? "▌" : "│")}GPU {gpu.Index}  " +
+                $"{UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%  " +
+                $"m{gpu.MemoryUsedPercent,3:F0}%  t{gpu.TemperatureC,3:F0}° ";
+            int width = SharpConsoleUI.Parsing.MarkupParser.StripLength(plain);
 
             // Wrap when this tile (plus its leading gap) would overflow. Never wrap the first tile
             // of a row — an over-wide tile has to clip rather than loop forever.
@@ -299,13 +322,27 @@ internal class OverviewTab : BaseResponsiveTab
                 column += TileGap.Length;
             }
 
-            var labelColor = selected ? accent : muted;
-            sb.Append(
-                (selected ? $"[{accent} bold]▌[/]" : " ") +
-                $"[{labelColor}{(selected ? " bold" : "")}]{label}[/]  " +
-                Metric(IconUtil, $"{gpu.UtilizationPercent:F0}%", gpu.UtilizationPercent) + " " +
-                Metric(IconMem, $"{gpu.MemoryUsedPercent:F0}%", gpu.MemoryUsedPercent) + " " +
-                Metric(IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC));
+            // Each tile sits on its own background SLAB, which is what turns it from text-in-a-stream
+            // into a discrete object. The selected slab is lifted (lighter) and its label accented;
+            // unselected slabs are recessed below the card background. The parser keeps styles on a
+            // stack, so inner [/] tags pop back to the slab background rather than clearing it.
+            var slab = (selected ? UIConstants.TileSelectedBg : UIConstants.TileBg).ToMarkup();
+            var labelColor = selected ? accent : UIConstants.PrimaryText.ToMarkup();
+
+            // NOTE: the foreground is stated explicitly before "on" — a bare "[on <bg>]" tag takes a
+            // different parser branch and did not paint the slab in practice.
+            sb.Append($"[{UIConstants.PrimaryText.ToMarkup()} on {slab}]");
+            sb.Append(selected ? $"[{accent} bold]▌[/]" : $"[{muted}]│[/]");
+            sb.Append($"[{labelColor} bold]GPU {gpu.Index}[/]  ");
+            // Utilization gets a mini-bar: a pre-attentive height cue you can scan for "which one is
+            // hot" without reading any digits — the actual point of a fleet strip.
+            sb.Append($"[{UIConstants.ThresholdColor(gpu.UtilizationPercent).ToMarkup()} bold]" +
+                      $"{UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%[/]  ");
+            // Mem/temp keep single-letter prefixes instead of icons: eight repeated emoji carried no
+            // distinguishing information and dominated the row visually.
+            sb.Append($"[{muted}]m[/][{UIConstants.ThresholdColor(gpu.MemoryUsedPercent).ToMarkup()}]{gpu.MemoryUsedPercent,3:F0}%[/]  ");
+            sb.Append($"[{muted}]t[/][{UIConstants.ThresholdColor(gpu.TemperatureC).ToMarkup()}]{gpu.TemperatureC,3:F0}°[/] ");
+            sb.Append("[/]");
 
             _tileSpans.Add((column, column + width, gpu.Index, row));
             column += width;
