@@ -35,11 +35,6 @@ internal static class UIConstants
     public static readonly Color TileBg = new(0x1b, 0x25, 0x33);
     public static readonly Color TileSelectedBg = new(0x2b, 0x4a, 0x63);
 
-    // The enclosing glyphs on an UNSELECTED tile. Deliberately not MutedText: the enclosure is the
-    // tile's only structural edge, so it has to read as a boundary. Sits between MutedText and
-    // PrimaryText — clearly present without competing with the values inside it or with the selected
-    // tile's accent.
-    public static readonly Color TileBracket = MutedText.Mix(PrimaryText, 0.55);
 
     public static readonly Color SeparatorColor = new(0x1e, 0x2a, 0x3a);
     public static readonly Color PrimaryText = new(0xc8, 0xd4, 0xe0);
@@ -49,6 +44,16 @@ internal static class UIConstants
     // Card header text: readable but softened — PrimaryText mixed a third of the way toward
     // MutedText, so titles are clearly legible without the harsh full-bright look.
     public static readonly Color CardTitle = PrimaryText.Mix(MutedText, 0.35);
+
+    // The enclosing glyphs on an UNSELECTED tile. Deliberately not MutedText: the enclosure is the
+    // tile's only structural edge, so it has to read as a boundary. Sits between MutedText and
+    // PrimaryText — clearly present without competing with the values inside it or with the selected
+    // tile's accent.
+    //
+    // MUST be declared after PrimaryText/MutedText: C# initializes static fields in TEXTUAL order, so
+    // computing this above them silently yielded black (the Color default) — the glyphs rendered
+    // invisible against the dark slab.
+    public static readonly Color TileBracket = MutedText.Mix(PrimaryText, 0.55);
 
     public static readonly Color Critical = new(0xff, 0x6b, 0x6b);
     public static readonly Color Warning = new(0xff, 0xd9, 0x3d);
