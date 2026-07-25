@@ -26,8 +26,28 @@ internal static class GpuFormat
     public static string Metric(string icon, string value, double thresholdValue)
     {
         var color = UIConstants.ThresholdColor(thresholdValue).ToMarkup();
-        return $"{icon} [{color} bold]{value}[/]";
+        return $"{IconCell(icon)} [{color} bold]{value}[/]";
     }
+
+    /// <summary>
+    /// An icon padded to a uniform two-column cell.
+    ///
+    /// The icons are a MIX of widths — ⚙ and 🌡 are narrow (1 column) while 🧠 ⚡ 🌀 🎬 are wide (2) — so
+    /// stacked lines that each begin with a different icon end up misaligned by a column, and no fixed
+    /// amount of padding fixes it. Pad the narrow ones to match the wide ones and every line's content
+    /// starts at the same column.
+    ///
+    /// Width comes from the framework's own measurement, so it agrees with what the renderer will do
+    /// rather than with a table maintained here.
+    /// </summary>
+    public static string IconCell(string icon)
+    {
+        int width = SharpConsoleUI.Parsing.MarkupParser.StripLength(icon);
+        return width >= IconCellWidth ? icon : icon + new string(' ', IconCellWidth - width);
+    }
+
+    /// <summary>Columns every icon occupies, set by the widest of them (the emoji are 2 cells).</summary>
+    public const int IconCellWidth = 2;
 
     /// <summary>
     /// NVENC/NVDEC readouts. Always shows both (muted at 0%) rather than appearing and disappearing:
@@ -44,7 +64,7 @@ internal static class GpuFormat
             return $"[{muted}]{label}[/] [{color} bold]{pct:F0}%[/]";
         }
 
-        return $"{IconMedia} {Engine("enc", gpu.EncoderPercent)} {Engine("dec", gpu.DecoderPercent)}";
+        return $"{IconCell(IconMedia)} {Engine("enc", gpu.EncoderPercent)} {Engine("dec", gpu.DecoderPercent)}";
     }
 
     /// <summary>

@@ -29,8 +29,26 @@ internal class OverviewTab : BaseResponsiveTab
     // is what the user sees and types), NOT by position in the snapshot list.
     private int _selectedGpuIndex;
 
+    /// <summary>
+    /// Sentinel selection for the DASHBOARD chip — the first tile in the strip on a multi-GPU host.
+    ///
+    /// Modelled as a pseudo GPU index rather than a separate mode flag, so it flows through the machinery
+    /// the strip already has: one selection, one set of click spans, one set of selector keys. A parallel
+    /// "is dashboard showing" boolean would need every one of those paths to agree with it.
+    ///
+    /// Negative because real indices are non-negative, so it can never collide with a card.
+    /// </summary>
+    private const int DashboardIndex = -1;
+
     /// <summary>The nvidia-smi index of the GPU currently shown in the Overview detail.</summary>
     public int SelectedGpuIndex => _selectedGpuIndex;
+
+    /// <summary>Whether the dashboard (fleet) view is showing rather than a single GPU's detail.</summary>
+    private bool DashboardSelected => _selectedGpuIndex == DashboardIndex;
+
+    // Utilization history per GPU for the dashboard panels' trailing gauges. Separate from _histories,
+    // which is keyed by metric name for the single-GPU cards.
+    private readonly KeyedHistoryTracker<int> _fleetHistories = new(120);
 
     // Click hit-test spans for the summary-strip tiles: display column range [Start, End) on tile
     // Row -> GPU index. Rebuilt every time the strip is composed, because tile widths depend on the
@@ -78,12 +96,15 @@ internal class OverviewTab : BaseResponsiveTab
         var gpus = Stats.ReadSnapshot().Gpus;
         if (gpus.Count <= 1) return false;
 
-        // Work in list positions (contiguous) and translate back to the GPU's real index, so
-        // wrapping is correct even with non-contiguous indices.
-        int pos = gpus.ToList().FindIndex(g => g.Index == _selectedGpuIndex);
-        if (pos < 0) pos = 0;
-        int next = ((pos + delta) % gpus.Count + gpus.Count) % gpus.Count;
-        return SelectGpu(gpus[next].Index);
+        // The ring is [dashboard, gpu0, gpu1, ...] so '[' and ']' walk the strip exactly as it reads on
+        // screen, dashboard chip included, rather than skipping the first tile.
+        var ring = new List<int> { DashboardIndex };
+        ring.AddRange(gpus.Select(g => g.Index));
+
+        int pos = ring.IndexOf(_selectedGpuIndex);
+        if (pos < 0) pos = 1;   // an unknown selection lands on the first GPU
+        int next = ((pos + delta) % ring.Count + ring.Count) % ring.Count;
+        return SelectGpu(ring[next]);
     }
 
     /// <summary>
@@ -96,8 +117,17 @@ internal class OverviewTab : BaseResponsiveTab
         if (gpuIndex == _selectedGpuIndex) return false;
 
         var gpus = Stats.ReadSnapshot().Gpus;
-        if (gpus.All(g => g.Index != gpuIndex)) return false;
+        // The dashboard sentinel is always selectable on a multi-GPU host; a real index must exist.
+        if (gpuIndex == DashboardIndex)
+        {
+            if (gpus.Count <= 1) return false;
+        }
+        else if (gpus.All(g => g.Index != gpuIndex))
+        {
+            return false;
+        }
 
+        bool crossesDashboard = (_selectedGpuIndex == DashboardIndex) != (gpuIndex == DashboardIndex);
         var previousCaps = gpus.FirstOrDefault(g => g.Index == _selectedGpuIndex)?.Caps;
         _selectedGpuIndex = gpuIndex;
         var newCaps = gpus.FirstOrDefault(g => g.Index == gpuIndex)?.Caps;
@@ -107,7 +137,10 @@ internal class OverviewTab : BaseResponsiveTab
         // from an NVIDIA card to an AMD one would leave a stale Fan card frozen at NVIDIA's last
         // reading. Rebuild only when the capability set actually differs — the common case (same
         // vendor, or a single vendor) takes the cheap in-place path.
-        bool needsRebuild = previousCaps != null && newCaps != null && previousCaps != newCaps;
+        // Crossing into or out of the dashboard swaps the entire right column — panel grid versus the
+        // five metric cards — so the controls must be rebuilt regardless of capabilities.
+        bool needsRebuild = crossesDashboard
+                            || (previousCaps != null && newCaps != null && previousCaps != newCaps);
 
         void Apply()
         {
@@ -298,12 +331,36 @@ internal class OverviewTab : BaseResponsiveTab
 
         var muted = UIConstants.MutedText.ToMarkup();
         var accent = UIConstants.Accent.ToMarkup();
-        var selectedIndex = SelectedGpu(snapshot)?.Index ?? -1;
+        // When the dashboard is selected, no GPU tile is — hence the sentinel rather than falling back
+        // to a card.
+        var selectedIndex = DashboardSelected ? DashboardIndex : (SelectedGpu(snapshot)?.Index ?? -2);
 
         var rows = new List<string>();
         var sb = new System.Text.StringBuilder();
         int column = 0;
         int row = 0;
+
+        // The DASHBOARD chip leads the strip: it is the fleet view, so it reads before the individual
+        // cards, and putting it first keeps its position stable however many GPUs come and go.
+        {
+            bool selected = DashboardSelected;
+            string plain = $"{TileOpen}DASH {snapshot.Gpus.Count} GPUs{TileClose}";
+            int width = SharpConsoleUI.Parsing.MarkupParser.StripLength(plain);
+
+            var slab = (selected ? UIConstants.TileSelectedBg : UIConstants.TileBg).ToMarkup();
+            var enclosure = selected ? $"{accent} bold" : UIConstants.TileBracket.ToMarkup();
+            var labelColor = selected ? accent : UIConstants.PrimaryText.ToMarkup();
+
+            sb.Append($"[{UIConstants.PrimaryText.ToMarkup()} on {slab}]");
+            sb.Append($"[{enclosure}]{TileOpen}[/]");
+            sb.Append($"[{labelColor} bold]DASH[/] ");
+            sb.Append($"[{muted}]{snapshot.Gpus.Count} GPUs[/]");
+            sb.Append($"[{enclosure}]{TileClose}[/]");
+            sb.Append("[/]");
+
+            _tileSpans.Add((column, column + width, DashboardIndex, row));
+            column += width;
+        }
 
         foreach (var gpu in snapshot.Gpus)
         {
@@ -476,6 +533,15 @@ internal class OverviewTab : BaseResponsiveTab
         // Top margin: start the content one row down from the panel's top edge.
         lines.Add("");
 
+        // With the DASH chip selected the left column shows fleet totals rather than one card's
+        // spec-sheet: combined VRAM, combined draw, the hottest card. Those numbers exist nowhere else
+        // in the app, since every other view is per-GPU.
+        if (DashboardSelected)
+        {
+            AppendFleetLines(lines, snapshot, Section, Row);
+            return lines;
+        }
+
         // Spec-sheet describes the SELECTED GPU only (Architecture C) — with one GPU that's the
         // only GPU, so this is identical to the previous single-GPU rendering.
         var gpu = SelectedGpu(snapshot);
@@ -536,6 +602,116 @@ internal class OverviewTab : BaseResponsiveTab
         return lines;
     }
 
+    /// <summary>
+    /// The fleet totals for the left column, reusing the spec-sheet's own Section/Row formatting so the
+    /// two views of that column look like the same panel in two states.
+    /// </summary>
+    private static void AppendFleetLines(List<string> lines, GpuSnapshot snapshot,
+                                         Action<string> section, Action<string, string, string> row)
+    {
+        var fleet = FleetSummary.From(snapshot);
+        var accent = UIConstants.Accent.ToMarkup();
+        var muted = UIConstants.MutedText.ToMarkup();
+        var text = UIConstants.PrimaryText.ToMarkup();
+
+        lines.Add($"[{accent} bold]FLEET · {fleet.GpuCount} GPUs[/]");
+
+        section("MEMORY");
+        row("Used", $"{fleet.VramUsedMb / 1024.0:F1}", "GB");
+        row("Total", $"{fleet.VramTotalMb / 1024.0:F1}", "GB");
+
+        section("POWER");
+        row("Draw", $"{fleet.PowerDrawWatts:F0}", "W");
+        // Say so when the total covers fewer cards than the fleet: a figure that silently omits a GPU
+        // with no power sensor would read as complete.
+        if (!fleet.PowerIsComplete)
+            lines.Add($"[{muted}]  {fleet.PowerReportingGpus} of {fleet.GpuCount} reporting[/]");
+
+        if (fleet.HottestGpuIndex is int hottest)
+        {
+            section("HOTTEST");
+            row("GPU", hottest.ToString(), "");
+            lines.Add($"[{muted}]{"Temp",-8}[/]" +
+                      $"[{UIConstants.ThresholdColor(fleet.HottestTemperatureC).ToMarkup()} bold]" +
+                      $"{fleet.HottestTemperatureC,6:F0}[/] [{muted}]°C[/]");
+        }
+
+        section("PROCESSES");
+        row("Total", fleet.ProcessCount.ToString(), "");
+
+        // Present only when something is actually throttling, so its presence is itself the signal.
+        if (fleet.Throttling.Count > 0)
+        {
+            section("THROTTLING");
+            foreach (var (gpuIndex, reason) in fleet.Throttling)
+                lines.Add($"[{UIConstants.Critical.ToMarkup()} bold]GPU {gpuIndex}[/] [{text}]{reason}[/]");
+        }
+    }
+
+    #region Fleet grid (the DASH chip's view)
+
+    /// <summary>
+    /// One hero panel per GPU, wrapped into rows. Wrapping is done by GROUPING the GPUs and emitting one
+    /// horizontal grid per row — the grid itself has no wrapping, and this is how ServerHub's dashboard
+    /// does the same job.
+    /// </summary>
+    private void BuildFleetGrid(ScrollablePanelControl panel, GpuSnapshot snapshot,
+                                IReadOnlyList<GpuDeviceInfo> deviceInfos)
+    {
+        int perRow = Math.Max(1, _stripWidth / GpuHeroPanel.Width);
+
+        for (int start = 0; start < snapshot.Gpus.Count; start += perRow)
+        {
+            var row = Controls.HorizontalGrid()
+                .WithAlignment(HorizontalAlignment.Left)
+                .WithVerticalAlignment(VerticalAlignment.Top);
+
+            for (int i = start; i < Math.Min(start + perRow, snapshot.Gpus.Count); i++)
+            {
+                var gpu = snapshot.Gpus[i];
+                var name = deviceInfos.FirstOrDefault(d => d.Index == gpu.Index)?.Name ?? $"GPU {gpu.Index}";
+
+                // Panels are never "selected" here: the strip's chips carry selection, and a panel
+                // highlighted independently of them would give two competing answers to "which GPU?".
+                var heroPanel = GpuHeroPanel.Build(
+                    gpu, name, ProcessCountFor(snapshot, gpu.Index),
+                    _fleetHistories.Get(gpu.Index), selected: false);
+
+                WireFleetPanel(heroPanel, gpu.Index);
+
+                row.Column(col =>
+                {
+                    col.Width(GpuHeroPanel.Width);
+                    col.Add(heroPanel);
+                });
+            }
+
+            panel.AddControl(row.Build());
+        }
+    }
+
+    private static int ProcessCountFor(GpuSnapshot snapshot, int gpuIndex) =>
+        snapshot.Processes.Count(p => p.GpuIndex == gpuIndex);
+
+    /// <summary>
+    /// Double-click a panel to open that GPU's detail — which is just selecting its chip, so the strip
+    /// and the view can never disagree about which GPU is current.
+    ///
+    /// No single-click handler by design: selection belongs to the strip's chips, and a panel that
+    /// highlighted independently would be a second, competing notion of "current" for the user to
+    /// reconcile.
+    /// </summary>
+    private void WireFleetPanel(PanelControl panel, int gpuIndex)
+    {
+        panel.MouseDoubleClick += (_, e) =>
+        {
+            SelectGpu(gpuIndex);
+            e.Handled = true;
+        };
+    }
+
+    #endregion
+
     protected override void BuildGraphsContent(ScrollablePanelControl panel, GpuSnapshot snapshot)
     {
         if (snapshot.Gpus.Count == 0) return;
@@ -544,6 +720,14 @@ internal class OverviewTab : BaseResponsiveTab
 
         // Multi-GPU only: the fleet-at-a-glance strip, which is also the selector.
         BuildSummaryStrip(panel, snapshot);
+
+        // With the DASH chip selected, the right column becomes the fleet's hero-panel grid instead of
+        // one GPU's cards. The strip stays above it either way — it is the selector for both.
+        if (DashboardSelected)
+        {
+            BuildFleetGrid(panel, snapshot, deviceInfos);
+            return;
+        }
 
         // Detail for the SELECTED GPU. Control names are deliberately GPU-INDEPENDENT ("sel_*"):
         // only one GPU's detail exists at a time, so switching GPU updates these controls in place
@@ -729,6 +913,10 @@ internal class OverviewTab : BaseResponsiveTab
     {
         foreach (var gpu in snapshot.Gpus)
         {
+            // Fleet gauge history for EVERY GPU, selected or not, so a panel already shows a trend the
+            // first time you look at the dashboard.
+            _fleetHistories.Add(gpu.Index, gpu.UtilizationPercent);
+
             _histories.Add($"{gpu.Index}_util", gpu.UtilizationPercent);
             _histories.Add($"{gpu.Index}_mem", gpu.MemoryUsedPercent);
             _histories.Add($"{gpu.Index}_temp", gpu.TemperatureC);
@@ -749,6 +937,27 @@ internal class OverviewTab : BaseResponsiveTab
             FindControlRecursive<MarkupControl>(panel, StripMarkupName, out var stripMarkup) && stripMarkup != null)
         {
             stripMarkup.SetContent(StripContent(snapshot));
+        }
+
+        // While the dashboard shows, the cards below the strip do not exist — refresh the hero panels
+        // in place instead. Rebuilding them each tick would destroy the panel controls the mouse
+        // handlers are attached to.
+        if (DashboardSelected)
+        {
+            var fleetInfos = Stats.ReadDeviceInfo();
+            foreach (var gpu in snapshot.Gpus)
+            {
+                if (!FindControlRecursive<PanelControl>(panel, GpuHeroPanel.NameFor(gpu.Index), out var hero)
+                    || hero == null)
+                {
+                    continue;
+                }
+
+                var heroName = fleetInfos.FirstOrDefault(d => d.Index == gpu.Index)?.Name ?? $"GPU {gpu.Index}";
+                GpuHeroPanel.Update(hero, gpu, heroName, ProcessCountFor(snapshot, gpu.Index),
+                    _fleetHistories.Get(gpu.Index), selected: false);
+            }
+            return;
         }
 
         // Everything below the strip is the SELECTED GPU's detail.

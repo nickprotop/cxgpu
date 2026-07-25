@@ -158,7 +158,9 @@ internal static class GpuHeroPanel
         int filled = (int)Math.Round(Math.Clamp(percent, 0, 100) / 100.0 * BarCells);
         var bar = $"[{color}]{new string('█', filled)}[/][{unfilled}]{new string('░', BarCells - filled)}[/]";
 
-        return $"{icon} {bar} [{color} bold]{value}[/]";
+        // Icon padded to a uniform cell so the bars and values in stacked lines start at the same
+        // column — the icons themselves are a mix of one- and two-column glyphs.
+        return $"{GpuFormat.IconCell(icon)} {bar} [{color} bold]{value}[/]";
     }
 
     /// <summary>
