@@ -195,14 +195,6 @@ internal class OverviewTab : BaseResponsiveTab
         int h = s / 3600, mm = (s % 3600) / 60; return mm == 0 ? $"{h}h" : $"{h}h{mm}m";
     }
 
-    // Metric icons — plain Unicode/emoji (NOT Nerd Font). SharpConsoleUI handles wide glyphs
-    // correctly (wide-continuation cells), so these render and align properly. Used in card titles.
-    private const string IconUtil = "⚙";
-    private const string IconMem = "🧠";
-    private const string IconTemp = "🌡";
-    private const string IconPower = "⚡";
-    private const string IconFan = "🌀";
-
     // One-line hero vitals — an at-a-glance summary with per-metric icons and threshold coloring
     // (green → yellow → red with load), so the whole GPU state reads instantly.
     // Metrics the owning backend cannot measure are OMITTED rather than shown at zero: an absent fan
@@ -213,78 +205,20 @@ internal class OverviewTab : BaseResponsiveTab
         var muted = UIConstants.MutedText.ToMarkup();
         // Power is only meaningful as a ratio when a cap is known; without one, colour it by absolute
         // draw instead of dividing by a limit that doesn't exist.
-        double powerPct = gpu.Caps.PowerLimit && gpu.PowerLimitWatts > 0
-            ? gpu.PowerDrawWatts / gpu.PowerLimitWatts * 100.0
-            : 0.0;
+        double powerPct = GpuFormat.PowerPercent(gpu);
 
         var parts = new List<string>
         {
-            Metric(IconUtil, $"{gpu.UtilizationPercent:F0}%", gpu.UtilizationPercent),
-            Metric(IconMem, $"{gpu.MemoryUsedMb / 1024.0:F1}/{gpu.MemoryTotalMb / 1024.0:F1} GB", gpu.MemoryUsedPercent),
-            Metric(IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC),
-            Metric(IconPower, $"{gpu.PowerDrawWatts:F0} W", powerPct)
+            GpuFormat.Metric(GpuFormat.IconUtil, $"{gpu.UtilizationPercent:F0}%", gpu.UtilizationPercent),
+            GpuFormat.Metric(GpuFormat.IconMem, $"{gpu.MemoryUsedMb / 1024.0:F1}/{gpu.MemoryTotalMb / 1024.0:F1} GB", gpu.MemoryUsedPercent),
+            GpuFormat.Metric(GpuFormat.IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC),
+            GpuFormat.Metric(GpuFormat.IconPower, $"{gpu.PowerDrawWatts:F0} W", powerPct)
         };
 
         if (gpu.Caps.FanSpeed)
-            parts.Add(Metric(IconFan, $"{gpu.FanSpeedPercent:F0}%", gpu.FanSpeedPercent));
+            parts.Add(GpuFormat.Metric(GpuFormat.IconFan, $"{gpu.FanSpeedPercent:F0}%", gpu.FanSpeedPercent));
 
         return string.Join($"[{muted}]   [/]", parts);
-    }
-
-    // An "<icon> <value>" fragment: icon plus a threshold-colored value.
-    private static string Metric(string icon, string value, double thresholdValue)
-    {
-        var color = UIConstants.ThresholdColor(thresholdValue).ToMarkup();
-        return $"{icon} [{color} bold]{value}[/]";
-    }
-
-    private const string IconMedia = "🎬";
-
-    // NVENC/NVDEC readouts, appended to the hero vitals line. Always shown (muted at 0%) rather
-    // than appearing/disappearing: a line whose fields come and go makes the whole hero jump.
-    private static string MediaEngines(GpuSample gpu)
-    {
-        var muted = UIConstants.MutedText.ToMarkup();
-        string Engine(string label, double pct)
-        {
-            var color = pct > 0 ? UIConstants.ThresholdColor(pct).ToMarkup() : muted;
-            return $"[{muted}]{label}[/] [{color} bold]{pct:F0}%[/]";
-        }
-
-        return $"{IconMedia} {Engine("enc", gpu.EncoderPercent)} {Engine("dec", gpu.DecoderPercent)}";
-    }
-
-    // Full-scale value for the power bar and its sparkline. Uses the cap when the backend reports
-    // one; otherwise a fixed reference, since a device that exposes no cap (this APU) still needs a
-    // stable axis — one that rescaled with draw would make every load look identical.
-    private const double PowerScaleFallbackWatts = 100;
-
-    private static double PowerScale(GpuSample gpu) =>
-        gpu.Caps.PowerLimit && gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : PowerScaleFallbackWatts;
-
-    // Throttle chip for the hero card — surfaced ONLY for real throttles (the provider already
-    // filters out the benign gpu_idle / applications-clocks bits, which are "Active" on any idle
-    // card). Empty string when the GPU is running unthrottled, so the chip is simply absent.
-    // Severity: a hardware slowdown or thermal cap is Critical (you are losing clocks to heat or a
-    // protection trip); a software power cap is Warning (expected behaviour at the power limit).
-    private static string ThrottleChip(GpuSample gpu)
-    {
-        // Backends without named throttle-reason bits (amdgpu) always report the flags false, so no
-        // chip would appear anyway — but gating explicitly keeps "no chip" meaning "not throttling"
-        // rather than "we cannot tell".
-        if (!gpu.Caps.ThrottleReasons) return "";
-
-        var reasons = new List<string>();
-        if (gpu.ThrottleThermal) reasons.Add("thermal");
-        if (gpu.ThrottleHwSlowdown) reasons.Add("hw slowdown");
-        if (gpu.ThrottlePower) reasons.Add("power cap");
-        if (reasons.Count == 0) return "";
-
-        var color = (gpu.ThrottleThermal || gpu.ThrottleHwSlowdown
-            ? UIConstants.Critical
-            : UIConstants.Warning).ToMarkup();
-
-        return $"[{color} bold]⚠ {string.Join(" · ", reasons)}[/]";
     }
 
     // The hero card's two lines: identity (+ throttle chip when throttling) and the vitals line
@@ -292,7 +226,7 @@ internal class OverviewTab : BaseResponsiveTab
     private static List<string> HeroLines(GpuSample gpu, string gpuName)
     {
         var titleLine = $"[{UIConstants.Accent.ToMarkup()} bold]{gpuName}[/]";
-        var chip = ThrottleChip(gpu);
+        var chip = GpuFormat.ThrottleChip(gpu);
         if (chip.Length > 0)
             titleLine += $"   {chip}";
 
@@ -302,7 +236,7 @@ internal class OverviewTab : BaseResponsiveTab
         // Encoder/decoder readouts only appear for backends that expose those engines — amdgpu does
         // not, so "enc 0% dec 0%" would be fiction there.
         if (gpu.Caps.EncoderDecoder)
-            vitals += $"[{muted}]   [/]" + MediaEngines(gpu);
+            vitals += $"[{muted}]   [/]" + GpuFormat.MediaEngines(gpu);
 
         return new List<string> { titleLine, vitals };
     }
@@ -349,29 +283,6 @@ internal class OverviewTab : BaseResponsiveTab
     private const string TileOpen = "‹";
     private const string TileClose = "›";
 
-    // Braille dot-columns, empty through full, matching the sparklines' braille idiom so the strip's
-    // inline gauge belongs to the same visual family as the graphs below it. The levels fill from the
-    // BOTTOM up (⡀ → ⡄ → ⡆ → ⡇), and the empty cell is U+2800 BRAILLE PATTERN BLANK — a real blank,
-    // not a mid-height dot, which floated oddly against the bottom-anchored fills.
-    private static readonly char[] BrailleColumns = { '⠀', '⡀', '⡄', '⡆', '⡇' };
-
-    // Inline braille utilization gauge for a tile. Four cells x four dot-levels gives 16 steps over
-    // 0-100% — a pre-attentive height cue you can scan for "which GPU is hot" without reading digits.
-    private static string UtilBar(double percent)
-    {
-        const int cells = 4;
-        const int levels = 4;   // dot rows per braille cell
-        int filled = (int)Math.Round(Math.Clamp(percent, 0, 100) / 100.0 * (cells * levels));
-
-        var sb = new System.Text.StringBuilder(cells);
-        for (int i = 0; i < cells; i++)
-        {
-            int cellFill = Math.Clamp(filled - i * levels, 0, levels);
-            sb.Append(BrailleColumns[cellFill]);
-        }
-        return sb.ToString();
-    }
-
     // Builds the tile rows and (re)records the click hit-test spans. The selected tile is marked
     // with a leading "▌" bar and bright/bold text; unselected tiles are muted, so the selection
     // reads at a glance without relying on a background fill (which the tinted panel bg would
@@ -403,7 +314,7 @@ internal class OverviewTab : BaseResponsiveTab
             // of text: with alignment, a hot GPU's digits sit directly under a cool one's.
             string plain =
                 $"{TileOpen}GPU {gpu.Index}  " +
-                $"{UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%  " +
+                $"{GpuFormat.UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%  " +
                 $"m{gpu.MemoryUsedPercent,3:F0}%  t{gpu.TemperatureC,3:F0}°" +
                 $"{TileClose}";
             int width = SharpConsoleUI.Parsing.MarkupParser.StripLength(plain);
@@ -451,7 +362,7 @@ internal class OverviewTab : BaseResponsiveTab
             // Utilization gets a mini-bar: a pre-attentive height cue you can scan for "which one is
             // hot" without reading any digits — the actual point of a fleet strip.
             sb.Append($"[{UIConstants.ThresholdColor(gpu.UtilizationPercent).ToMarkup()} bold]" +
-                      $"{UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%[/]  ");
+                      $"{GpuFormat.UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%[/]  ");
             // Mem/temp keep single-letter prefixes instead of icons: eight repeated emoji carried no
             // distinguishing information and dominated the row visually.
             sb.Append($"[{muted}]m[/][{UIConstants.ThresholdColor(gpu.MemoryUsedPercent).ToMarkup()}]{gpu.MemoryUsedPercent,3:F0}%[/]  ");
@@ -667,7 +578,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .WithLabel(IconUtil).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .WithLabel(GpuFormat.IconUtil).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
                 .WithAnimatedValue()
                 .Build());
@@ -697,7 +608,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .WithLabel(IconMem).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .WithLabel(GpuFormat.IconMem).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
                 .WithAnimatedValue()
                 .Build());
@@ -727,7 +638,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .WithLabel(IconTemp).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .WithLabel(GpuFormat.IconTemp).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
                 .WithAnimatedValue()
                 .Build());
@@ -754,10 +665,10 @@ internal class OverviewTab : BaseResponsiveTab
             powerCard.AddControl(new BarGraphBuilder()
                 .WithName("sel_power_bar")
                 .WithValue(gpu.PowerDrawWatts)
-                .WithMaxValue(PowerScale(gpu))
+                .WithMaxValue(GpuFormat.PowerScale(gpu))
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .WithLabel(IconPower).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .WithLabel(GpuFormat.IconPower).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
                 .WithAnimatedValue()
                 .Build());
@@ -765,7 +676,7 @@ internal class OverviewTab : BaseResponsiveTab
             powerCard.AddControl(new SparklineBuilder()
                 .WithName("sel_power_spark")
                 .WithHeight(_sparklineHeight)
-                .WithMaxValue(PowerScale(gpu))
+                .WithMaxValue(GpuFormat.PowerScale(gpu))
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
                 .WithXAxis(_showTimeAxis ? TimeAxisTicks : null, _refreshSeconds)
@@ -792,7 +703,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
-                .WithLabel(IconFan).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
+                .WithLabel(GpuFormat.IconFan).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
                 .WithAnimatedValue()
                 .Build());
@@ -898,7 +809,9 @@ internal class OverviewTab : BaseResponsiveTab
                 if (FindControlRecursive<BarGraphControl>(pCard, "sel_power_bar", out var pBar) && pBar != null)
                 {
                     pBar.Value = gpu.PowerDrawWatts;
-                    double powerPercent = gpu.PowerLimitWatts > 0 ? (gpu.PowerDrawWatts / gpu.PowerLimitWatts) * 100.0 : 0.0;
+                    // Via GpuFormat: this site previously omitted the Caps.PowerLimit gate, so a card
+                    // with no reported cap was coloured against a limit that does not exist.
+                    double powerPercent = GpuFormat.PowerPercent(gpu);
                     pBar.FilledColor = UIConstants.ThresholdColor(powerPercent);
                 }
             }
