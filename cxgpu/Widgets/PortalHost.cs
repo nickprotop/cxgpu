@@ -12,7 +12,7 @@ namespace cxgpu.Widgets;
 /// </summary>
 internal static class PortalHost
 {
-    /// <summary>Left inset, matching the status bar's own padding so a portal lines up under it.</summary>
+    /// <summary>Inset from the screen edge, matching the status bar's own padding.</summary>
     private const int AnchorX = 2;
 
     /// <summary>
@@ -33,6 +33,19 @@ internal static class PortalHost
         int bottom = ws.DesktopBottomRight.Y - StatusBarRows;
         int y = Math.Max(0, bottom - height + 1);
         return new System.Drawing.Rectangle(AnchorX, y, width, height);
+    }
+
+    /// <summary>
+    /// As <see cref="AnchorAbove"/>, but flush to the RIGHT edge — for a portal opened from a
+    /// right-hand status-bar item, so the flyout appears under the control that summoned it rather
+    /// than across the screen from it.
+    /// </summary>
+    public static System.Drawing.Rectangle AnchorAboveRight(ConsoleWindowSystem ws, int width, int height)
+    {
+        int bottom = ws.DesktopBottomRight.Y - StatusBarRows;
+        int y = Math.Max(0, bottom - height + 1);
+        int x = Math.Max(0, ws.DesktopBottomRight.X - width - AnchorX + 1);
+        return new System.Drawing.Rectangle(x, y, width, height);
     }
 
     /// <summary>

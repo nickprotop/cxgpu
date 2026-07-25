@@ -67,15 +67,20 @@ internal class OverviewTab : BaseResponsiveTab
     // (just without the indicator) if it is constructed without one.
     private readonly Action<string, Action>? _runBusy;
 
+    // Session peaks, for the SESSION section. Optional so the tab still works without one.
+    private readonly Gpu.Alerts.SessionStats? _session;
+
     public OverviewTab(ConsoleWindowSystem windowSystem, IGpuStatsProvider stats,
                        Configuration.CxgpuConfig config,
-                       Action<string, Action>? runBusy = null)
+                       Action<string, Action>? runBusy = null,
+                       Gpu.Alerts.SessionStats? session = null)
         : base(windowSystem, stats)
     {
         _sparklineHeight = config.SparklineHeight;
         _refreshSeconds = config.RefreshIntervalMs / 1000.0;
         _showTimeAxis = config.ShowTimeAxis;
         _runBusy = runBusy;
+        _session = session;
 
         // The strip reads the selection through a callback rather than being handed a value, so it can
         // never render a selection the tab has already moved past.
@@ -307,6 +312,60 @@ internal class OverviewTab : BaseResponsiveTab
     }
 
 
+    /// <summary>
+    /// The SESSION section: what this card actually did while the app has been open.
+    ///
+    /// The live view answers "how is it now"; the chips vanish when a condition clears. This answers
+    /// "what did I miss" — the peak it reached, how long it spent throttled — which is the question
+    /// anyone leaving a training run unattended actually has.
+    ///
+    /// Sits in the left column because that column is otherwise entirely STATIC (driver, PCIe, CUDA,
+    /// clocks, capacity), so this adds a new kind of information rather than competing with the live
+    /// readings on the right.
+    /// </summary>
+    private void AppendSessionLines(List<string> lines, GpuSample gpu)
+    {
+        if (_session == null) return;
+
+        var stats = _session.For(gpu.Index);
+        if (stats == null) return;
+
+        var now = DateTime.UtcNow;
+        var muted = UIConstants.MutedText.ToMarkup();
+        const int labelW = 8;
+
+        void Row(string label, string value, string unit, SharpConsoleUI.Color color) =>
+            lines.Add($"[{muted}]{label,-labelW}[/][{color.ToMarkup()} bold]{value,6}[/]" +
+                      (unit.Length > 0 ? $" [{muted}]{unit}[/]" : ""));
+
+        lines.Add("");
+        lines.Add($"[{UIConstants.Accent.ToMarkup()} bold]SESSION[/] " +
+                  $"[{muted}]{GpuFormat.Duration(_session.Elapsed(now))}[/]");
+
+        // Peaks are coloured by the SAME thresholds the alerts use, so a peak that crossed critical
+        // reads red here — the colour means one thing everywhere.
+        Row("Peak °C", $"{stats.PeakTemperatureC:F0}", "°C",
+            GpuFormat.TemperatureColor(gpu with { TemperatureC = stats.PeakTemperatureC }));
+
+        // Omitted rather than shown at zero when the card reports no power: the same null-versus-zero
+        // rule the live cards follow — a peak of 0 W would be a measurement that never happened.
+        if (stats.HasPower)
+            Row("Peak W", $"{stats.PeakPowerWatts:F0}", "W",
+                UIConstants.ThresholdColor(GpuFormat.PowerPercent(gpu with
+                {
+                    PowerDrawWatts = stats.PeakPowerWatts
+                })));
+
+        // Throttle time only appears once there IS some, and only for backends that can detect it —
+        // "0s throttled" on a card that cannot tell would be a claim without basis.
+        var throttled = _session.ThrottledFor(gpu.Index, now);
+        if (gpu.Caps.ThrottleReasons && throttled > TimeSpan.Zero)
+            Row("Throttled", GpuFormat.Duration(throttled), "", UIConstants.Warning);
+
+        if (stats.CriticalEvents > 0)
+            Row("Events", stats.CriticalEvents.ToString(), "", UIConstants.Critical);
+    }
+
     // Padding added to the measured spec-sheet width for the left column (breathing room before
     // the separator).
     private const int LeftColumnPadding = 2;
@@ -413,6 +472,8 @@ internal class OverviewTab : BaseResponsiveTab
                 if (hasTempLimit) Row("Temp", $"{d!.TemperatureLimitC:F0}", "°C");
             }
 
+            AppendSessionLines(lines, gpu);
+
             if (!string.IsNullOrWhiteSpace(d?.VBiosVersion))
             {
                 Section("BIOS");
@@ -431,7 +492,7 @@ internal class OverviewTab : BaseResponsiveTab
     /// The fleet totals for the left column, reusing the spec-sheet's own Section/Row formatting so the
     /// two views of that column look like the same panel in two states.
     /// </summary>
-    private static void AppendFleetLines(List<string> lines, GpuSnapshot snapshot,
+    private void AppendFleetLines(List<string> lines, GpuSnapshot snapshot,
                                          Action<string> section, Action<string, string, string> row)
     {
         var fleet = FleetSummary.From(snapshot);
@@ -456,8 +517,15 @@ internal class OverviewTab : BaseResponsiveTab
         {
             section("HOTTEST");
             row("GPU", hottest.ToString(), "");
+            // Coloured by the hottest card's own thresholds, not the percentage bands — °C is not a
+            // percentage, and an AMD card at 92°C is normal where a GeForce at 92°C is not.
+            var hottestGpu = snapshot.Gpus.FirstOrDefault(g => g.Index == fleet.HottestGpuIndex);
+            var hottestColor = hottestGpu != null
+                ? GpuFormat.TemperatureColor(hottestGpu)
+                : UIConstants.Normal;
+
             lines.Add($"[{muted}]{"Temp",-8}[/]" +
-                      $"[{UIConstants.ThresholdColor(fleet.HottestTemperatureC).ToMarkup()} bold]" +
+                      $"[{hottestColor.ToMarkup()} bold]" +
                       $"{fleet.HottestTemperatureC,6:F0}[/] [{muted}]°C[/]");
         }
 
@@ -471,6 +539,89 @@ internal class OverviewTab : BaseResponsiveTab
             foreach (var (gpuIndex, reason) in fleet.Throttling)
                 lines.Add($"[{UIConstants.Critical.ToMarkup()} bold]GPU {gpuIndex}[/] [{text}]{reason}[/]");
         }
+
+        AppendFleetSessionLines(lines, snapshot);
+    }
+
+    /// <summary>
+    /// The fleet's SESSION section: the worst any card reached, and the totals across the box.
+    ///
+    /// The per-GPU section answers "what did THIS card do"; on a multi-GPU host the question is
+    /// usually "did anything in this machine get hot today", which no per-card view answers without
+    /// clicking through every tile.
+    /// </summary>
+    private void AppendFleetSessionLines(List<string> lines, GpuSnapshot snapshot)
+    {
+        if (_session == null || snapshot.Gpus.Count == 0) return;
+
+        var now = DateTime.UtcNow;
+        var muted = UIConstants.MutedText.ToMarkup();
+        const int labelW = 8;
+
+        // Fold across every card that has been seen, not only those in this snapshot: a card that
+        // dropped out mid-session still contributed to what the machine did.
+        double peakTemp = 0;
+        double peakPower = 0;
+        bool anyPower = false;
+        int criticals = 0;
+        var throttled = TimeSpan.Zero;
+        int? hottestIndex = null;
+
+        foreach (var (index, stats) in _session.All)
+        {
+            if (stats.PeakTemperatureC > peakTemp)
+            {
+                peakTemp = stats.PeakTemperatureC;
+                hottestIndex = index;
+            }
+
+            if (stats.HasPower)
+            {
+                anyPower = true;
+                peakPower = Math.Max(peakPower, stats.PeakPowerWatts);
+            }
+
+            criticals += stats.CriticalEvents;
+            throttled += _session.ThrottledFor(index, now);
+        }
+
+        if (hottestIndex == null) return;
+
+        void Row(string label, string value, string unit, SharpConsoleUI.Color color) =>
+            lines.Add($"[{muted}]{label,-labelW}[/][{color.ToMarkup()} bold]{value,6}[/]" +
+                      (unit.Length > 0 ? $" [{muted}]{unit}[/]" : ""));
+
+        lines.Add("");
+        lines.Add($"[{UIConstants.Accent.ToMarkup()} bold]SESSION[/] " +
+                  $"[{muted}]{GpuFormat.Duration(_session.Elapsed(now))}[/]");
+
+        // Coloured by the hottest card's OWN thresholds — an AMD card peaking at 95°C is normal where
+        // a GeForce at 95°C is not, so a single fleet-wide rule would misreport one of them.
+        var hottest = snapshot.Gpus.FirstOrDefault(g => g.Index == hottestIndex.Value);
+        var tempColor = hottest != null
+            ? GpuFormat.TemperatureColor(hottest with { TemperatureC = peakTemp })
+            : UIConstants.Normal;
+
+        Row("Peak °C", $"{peakTemp:F0}", "°C", tempColor);
+        lines.Add($"[{muted}]{"",-labelW}on GPU {hottestIndex.Value}[/]");
+
+        // The highest any SINGLE card reached — deliberately not summed. Per-card peaks happen at
+        // different moments, so adding them would report a combined draw the machine may never
+        // actually have pulled.
+        if (anyPower)
+            Row("Peak W", $"{peakPower:F0}", "W", UIConstants.Normal);
+
+        // Summed across cards, so this can EXCEED the session length when several throttle at once —
+        // it is card-time, not wall-clock. Labelled "GPU-time" so a total larger than the session
+        // does not read as a bug.
+        if (throttled > TimeSpan.Zero)
+        {
+            Row("Throttled", GpuFormat.Duration(throttled), "", UIConstants.Warning);
+            lines.Add($"[{muted}]{"",-labelW}GPU-time, all cards[/]");
+        }
+
+        if (criticals > 0)
+            Row("Events", criticals.ToString(), "", UIConstants.Critical);
     }
 
 

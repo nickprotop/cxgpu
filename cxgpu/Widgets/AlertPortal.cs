@@ -89,16 +89,22 @@ internal static class AlertPortal
 
         var rows = Rows(engine);
         int height = Math.Clamp(rows.Count + Chrome, Chrome + 1, MaxRows + Chrome);
-        var rect = PortalHost.AnchorAbove(ws, Width, height);
+
+        // Anchored to the RIGHT because its badge is the last item on the right of the status bar —
+        // a flyout should appear under the control that summoned it, not across the screen from it.
+        var rect = PortalHost.AnchorAboveRight(ws, Width, height);
 
         // Explicit column widths: with NoBorder there are no separators between cells, so
         // auto-sized columns render as one run of text ("17:42:10GPU 0thermal throttle").
+        // The last column is left unsized so it takes the remaining width, and the table stretches to
+        // fill the panel rather than leaving a ragged gap inside the border.
         var table = Controls.Table()
             .AddColumn("Time", TextJustification.Left, 10)
             .AddColumn("GPU", TextJustification.Left, 7)
-            .AddColumn("Event", TextJustification.Left)
+            .AddColumn("Event", TextJustification.Left, Width - 21)
             // PortalPanel draws the rounded border; an inner border would double it.
             .NoBorder()
+            .StretchHorizontal()
             .WithVerticalAlignment(VerticalAlignment.Fill);
 
         foreach (var (time, gpu, text) in rows)

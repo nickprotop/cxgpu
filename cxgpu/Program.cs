@@ -46,6 +46,12 @@ internal class Program
             windowSystem.LogService.LogInfo("Starting cxgpu");
             await Task.Run(() => windowSystem.Run());
             windowSystem.LogService.LogInfo("cxgpu stopped");
+
+            // Printed AFTER Run() returns, so the TUI has released the terminal and this lands in the
+            // user's scrollback rather than being wiped by the alternate screen buffer.
+            if (config.Alerts.SessionSummaryOnExit)
+                dashboard.PrintSessionSummary();
+
             return 0;
         }
         catch (Exception ex)

@@ -70,6 +70,43 @@ internal sealed class DashboardWindow
     // Per-GPU temperature thresholds, refreshed once per update tick (see RefreshThresholdCache).
     private readonly Dictionary<int, ThresholdPair?> _thresholdCache = new();
 
+    // Session peaks and throttle time, for the Overview's SESSION section and the exit summary.
+    private readonly SessionStats _session = new(DateTime.UtcNow);
+
+    /// <summary>
+    /// Prints what the session's GPUs actually did — peaks, throttle time, critical events.
+    ///
+    /// Silent when nothing fired: a clean run should exit without ceremony, and a summary that always
+    /// prints stops being read. Call AFTER the window system has stopped, so this reaches the user's
+    /// scrollback rather than the alternate screen buffer.
+    /// </summary>
+    public void PrintSessionSummary()
+    {
+        if (!_session.AnythingHappened) return;
+
+        var now = DateTime.UtcNow;
+        var deviceInfos = _stats.ReadDeviceInfo();
+
+        Console.WriteLine();
+        Console.WriteLine($"cxgpu session summary ({GpuFormat.Duration(_session.Elapsed(now))})");
+
+        foreach (var (index, stats) in _session.All.OrderBy(kv => kv.Key))
+        {
+            var name = deviceInfos.FirstOrDefault(d => d.Index == index)?.Name ?? $"GPU {index}";
+
+            var parts = new List<string> { $"peak {stats.PeakTemperatureC:F0}°C" };
+            if (stats.HasPower) parts.Add($"peak {stats.PeakPowerWatts:F0} W");
+
+            var throttled = _session.ThrottledFor(index, now);
+            if (throttled > TimeSpan.Zero) parts.Add($"throttled {GpuFormat.Duration(throttled)}");
+            if (stats.CriticalEvents > 0) parts.Add($"{stats.CriticalEvents} critical");
+
+            Console.WriteLine($"  GPU {index} · {name}: {string.Join(", ", parts)}");
+        }
+
+        Console.WriteLine();
+    }
+
     /// <summary>
     /// Re-resolves each card's thresholds. Called once per tick rather than per render, since device
     /// info comes from a vendor subprocess and the answer only changes when config or hardware does.
@@ -234,7 +271,7 @@ internal sealed class DashboardWindow
     private void CreateTabs()
     {
         if (_config.ShowOverviewTab)
-            _tabs.Add(new OverviewTab(_windowSystem, _stats, _config, _busy.Run));
+            _tabs.Add(new OverviewTab(_windowSystem, _stats, _config, _busy.Run, _session));
         if (_config.ShowProcessesTab)
             // The process list follows the Overview's GPU selection (and only scopes at all when
             // there's more than one GPU), so switching GPU switches both views together.
@@ -393,11 +430,16 @@ internal sealed class DashboardWindow
 
         var statusBar = builder
             .AddLeftSeparator()
-            .AddLeft(_alertItem)
             .AddLeft("?", "Help", OpenHelp)
             .AddLeft("F9", "Settings", OpenSettings)
             .AddLeft("F10", "Exit", () => _windowSystem.Shutdown())
+            // The alert badge sits at the FAR RIGHT, after the stats legend: it reports state rather
+            // than offering navigation, so it belongs with the readouts and not among the shortcut
+            // hints — and a hint list whose contents shift as alerts come and go is harder to build
+            // muscle memory against. Last position keeps it in a fixed corner, so its appearance is
+            // noticeable and its location predictable.
             .AddRightText(FormatStatsLegend(_stats.ReadSnapshot(), SelectedGpuIndex))
+            .AddRight(_alertItem)
             .WithBackgroundColor(UIConstants.HeaderBg)
             .WithForegroundColor(UIConstants.MutedText)
             .WithShortcutForegroundColor(UIConstants.Accent)
@@ -423,9 +465,15 @@ internal sealed class DashboardWindow
         // are about reading the numbers correctly, not about being notified.
         RefreshThresholdCache(deviceInfos);
 
+        // Peaks are recorded regardless of the Enabled flag: they are a record of what the hardware
+        // did, not a notification, and a user who turned alerts off still wants to know how hot it got.
+        _session.Observe(snapshot);
+
         if (!_config.Alerts.Enabled) return;
 
-        var changes = _alerts.Evaluate(snapshot, deviceInfos, DateTime.UtcNow);
+        var now = DateTime.UtcNow;
+        var changes = _alerts.Evaluate(snapshot, deviceInfos, now);
+        _session.Observe(changes, now);
 
         UpdateAlertBadge();
         ShowAlertToasts(changes);
@@ -446,18 +494,37 @@ internal sealed class DashboardWindow
     {
         if (_alertItem == null) return;
 
-        int count = _alerts.Active.Count;
-        if (count == 0)
-        {
-            _alertItem.IsVisible = false;
-            return;
-        }
+        int active = _alerts.Active.Count;
+        int total = _alerts.History.Count;
 
-        _alertItem.IsVisible = true;
-        _alertItem.Label = count == 1 ? "1 alert" : $"{count} alerts";
-        _alertItem.LabelForeground = _alerts.WorstActive == EventSeverity.Critical
-            ? UIConstants.Critical
-            : UIConstants.Warning;
+        // EVERY setter on StatusBarItem calls OnItemChanged -> Invalidate(Relayout), so assigning
+        // unconditionally would force a full status-bar relayout on every tick. That starved the rest
+        // of the UI: hints stopped rendering and the window stopped responding to F10/Ctrl+C.
+        // Only touch a property when its value actually changes.
+
+        // Visible once ANYTHING has happened this session, not only while something is active: the
+        // portal keeps resolved events precisely so "did it throttle while I was away?" can be
+        // answered, and hiding the only way to open it the moment a condition clears would make that
+        // history unreachable. A machine that has been clean all session still shows no new chrome.
+        bool visible = total > 0;
+        if (_alertItem.IsVisible != visible) _alertItem.IsVisible = visible;
+        if (!visible) return;
+
+        // Active count while something is live; the session total once everything has cleared, so the
+        // label says what clicking it will show.
+        var label = active > 0
+            ? (active == 1 ? "1 alert" : $"{active} alerts")
+            : (total == 1 ? "1 past" : $"{total} past");
+        if (_alertItem.Label != label) _alertItem.Label = label;
+
+        // Muted once nothing is active — the history is still reachable, but it is no longer something
+        // demanding attention.
+        var colour = active == 0
+            ? UIConstants.MutedText
+            : _alerts.WorstActive == EventSeverity.Critical
+                ? UIConstants.Critical
+                : UIConstants.Warning;
+        if (_alertItem.LabelForeground != colour) _alertItem.LabelForeground = colour;
     }
 
     /// <summary>
@@ -489,7 +556,10 @@ internal sealed class DashboardWindow
                 new ToastOptions(
                     Timeout: critical ? null : WarningToastMs,
                     Sticky: critical,
-                    Position: ToastPosition.BottomRight));
+                    // TOP right, away from both the alert badge and the portal it opens — a sticky
+                    // critical toast anchored bottom-right sat directly on top of the badge,
+                    // permanently hiding the one control that reaches the event history.
+                    Position: ToastPosition.TopRight));
 
             _alertToasts[e.Key] = id;
         }
