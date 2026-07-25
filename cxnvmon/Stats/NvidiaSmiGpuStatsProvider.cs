@@ -85,6 +85,25 @@ internal class NvidiaSmiGpuStatsProvider : IGpuStatsProvider
                 ));
             }
 
+            // Merge in the per-process engine utilization from pmon. This is a LEFT join onto the
+            // compute-apps list: pmon also reports graphics processes (type G) that compute-apps
+            // never lists, and those have no memory figure, so a union would show blank-memory rows.
+            var pmon = ReadPmon();
+            if (pmon.Count > 0)
+            {
+                for (int i = 0; i < procSamples.Count; i++)
+                {
+                    if (!pmon.TryGetValue(procSamples[i].Pid, out var m)) continue;
+                    procSamples[i] = procSamples[i] with
+                    {
+                        SmPercent = m.Sm,
+                        MemPercent = m.Mem,
+                        EncPercent = m.Enc,
+                        DecPercent = m.Dec
+                    };
+                }
+            }
+
             return new GpuSnapshot(gpuSamples, procSamples);
         }
         catch
@@ -154,6 +173,77 @@ internal class NvidiaSmiGpuStatsProvider : IGpuStatsProvider
         }
 
         return _cudaVersion = "";
+    }
+
+    /// <summary>Per-process engine utilization from pmon, keyed by PID. Null members mean "no data".</summary>
+    private readonly record struct PmonSample(double? Sm, double? Mem, double? Enc, double? Dec);
+
+    // Reads `nvidia-smi pmon -c 1` — a DIFFERENT call from --query-compute-apps, and the only source
+    // of per-process SM/mem/enc/dec percentages.
+    //
+    // Columns are located by NAME from the header row rather than by fixed index: the column set
+    // varies by driver (595.84 emits gpu/pid/type/sm/mem/enc/dec/jpg/ofa/command — the jpg and ofa
+    // columns are absent on older drivers, so a hardcoded index would read "jpg" as the command).
+    //
+    // pmon needs driver support and can require privileges; on failure this returns an empty map and
+    // the columns simply render blank, rather than taking down the snapshot.
+    private Dictionary<int, PmonSample> ReadPmon()
+    {
+        var result = new Dictionary<int, PmonSample>();
+
+        try
+        {
+            var lines = RunNvidiaSmi("pmon -c 1");
+            if (lines.Count == 0) return result;
+
+            // Column name -> field position, taken from the first header line ("# gpu pid type sm ...").
+            var columns = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in lines)
+            {
+                if (!line.TrimStart().StartsWith('#')) continue;
+
+                var names = line.TrimStart('#', ' ')
+                                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                // The header we want names the pid column; the second header line is units ("# Idx # C/G % ...").
+                if (!names.Contains("pid", StringComparer.OrdinalIgnoreCase)) continue;
+
+                columns.Clear();
+                for (int i = 0; i < names.Length; i++)
+                    columns[names[i]] = i;
+                break;
+            }
+
+            if (!columns.TryGetValue("pid", out var pidCol)) return result;
+
+            double? Field(string[] fields, string name)
+            {
+                if (!columns.TryGetValue(name, out var idx) || idx >= fields.Length) return null;
+                // pmon writes "-" for idle or unsupported engines; that's "no data", NOT zero.
+                return double.TryParse(fields[idx], NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+                    ? v
+                    : null;
+            }
+
+            foreach (var line in lines)
+            {
+                if (line.TrimStart().StartsWith('#')) continue;
+
+                var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (fields.Length <= pidCol) continue;
+                if (!int.TryParse(fields[pidCol], out var pid)) continue;
+
+                result[pid] = new PmonSample(
+                    Sm: Field(fields, "sm"),
+                    Mem: Field(fields, "mem"),
+                    Enc: Field(fields, "enc"),
+                    Dec: Field(fields, "dec"));
+            }
+        }
+        catch
+        {
+        }
+
+        return result;
     }
 
     // nvidia-smi emits "[N/A]", "[Not Supported]" and similar for unsupported fields; treat any

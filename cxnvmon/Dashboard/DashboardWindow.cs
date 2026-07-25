@@ -21,6 +21,11 @@ internal sealed class DashboardWindow
 
     private Window? _mainWindow;
     private readonly List<ITab> _tabs = new();
+
+    // Whether this host has more than one GPU, latched from the first snapshot. Drives whether the
+    // process list is scoped to a single GPU — on a single-GPU box scoping would just be a way to
+    // accidentally hide processes.
+    private bool _multiGpu;
     private TabControl? _tabControl;
     private StatusBarControl? _statusBar;
 
@@ -80,8 +85,12 @@ internal sealed class DashboardWindow
         BuildTopStatusBar(mainWindow);
         mainWindow.AddControl(Controls.RuleBuilder().StickyTop().WithColor(UIConstants.SeparatorColor).Build());
 
-        CreateTabs();
+        // Read the first snapshot BEFORE creating tabs: the GPU count decides whether the process
+        // list scopes to one GPU, and the tabs capture that decision at construction.
         var initialSnapshot = _stats.ReadSnapshot();
+        _multiGpu = initialSnapshot.Gpus.Count > 1;
+
+        CreateTabs();
         BuildTabSection(mainWindow, initialSnapshot);
 
         BuildBottomStatusBar(mainWindow);
@@ -141,7 +150,13 @@ internal sealed class DashboardWindow
         if (_config.ShowOverviewTab)
             _tabs.Add(new OverviewTab(_windowSystem, _stats, _config));
         if (_config.ShowProcessesTab)
-            _tabs.Add(new ProcessesTab(_windowSystem, _stats));
+            // The process list follows the Overview's GPU selection (and only scopes at all when
+            // there's more than one GPU), so switching GPU switches both views together.
+            _tabs.Add(new ProcessesTab(
+                _windowSystem,
+                _stats,
+                selectedGpuIndex: () => SelectedGpuIndex,
+                isMultiGpu: () => _multiGpu));
         // Details tab retired: the Overview left panel is now the full device spec-sheet, so a
         // separate Details tab would just duplicate it. (DetailsTab.cs / the ShowDetailsTab config
         // are kept so it can be re-enabled if ever needed.)

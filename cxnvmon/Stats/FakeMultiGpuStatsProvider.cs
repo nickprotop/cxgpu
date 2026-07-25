@@ -115,11 +115,24 @@ internal sealed class FakeMultiGpuStatsProvider : IGpuStatsProvider
                 ThrottlePower: i == 1,
                 ThrottleHwSlowdown: false));
 
+            // Two processes on the first GPU so per-GPU filtering is visibly exercised. One process
+            // per GPU carries null percentages, mimicking a pmon row that reports "-".
             procs.Add(new GpuProcessSample(
                 Pid: 1000 + i,
                 Name: $"/usr/bin/fake-worker-{i}",
                 MemoryUsedMb: 512 * (i + 1),
-                GpuIndex: i));
+                GpuIndex: i,
+                SmPercent: (i * 29 + _tick * 2) % 101,
+                MemPercent: (i * 13 + 20) % 101,
+                EncPercent: i == 1 ? 42 : 0,
+                DecPercent: i == 1 ? 17 : 0));
+
+            if (i == 0)
+                procs.Add(new GpuProcessSample(
+                    Pid: 2000,
+                    Name: "/usr/lib/xorg/Xorg",
+                    MemoryUsedMb: 128,
+                    GpuIndex: 0));
         }
 
         return new GpuSnapshot(gpus, procs);

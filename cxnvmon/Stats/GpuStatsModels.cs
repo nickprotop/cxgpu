@@ -27,13 +27,20 @@ internal record GpuSample(
     bool ThrottleHwSlowdown = false);
 
 /// <summary>
-/// Information about a process running on a GPU
+/// Information about a process running on a GPU. The per-engine percentages come from
+/// <c>nvidia-smi pmon</c>, which is a separate call from the compute-apps query that supplies
+/// memory; they are null when pmon is unavailable or reports "-" (idle/unsupported), so the UI can
+/// distinguish "no data" from a genuine 0%.
 /// </summary>
 internal record GpuProcessSample(
     int Pid,
     string Name,
     double MemoryUsedMb,
-    int GpuIndex);
+    int GpuIndex,
+    double? SmPercent = null,
+    double? MemPercent = null,
+    double? EncPercent = null,
+    double? DecPercent = null);
 
 /// <summary>
 /// Snapshot of all GPU statistics

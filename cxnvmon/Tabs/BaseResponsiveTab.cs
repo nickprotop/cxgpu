@@ -58,7 +58,7 @@ internal abstract class BaseResponsiveTab : ITab
         UpdateLeftColumnText(grid, snapshot);
     }
 
-    public void HandleResize(int newWidth, int newHeight)
+    public virtual void HandleResize(int newWidth, int newHeight)
     {
         var grid = FindPanel();
         if (grid == null || !grid.Visible)
