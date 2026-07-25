@@ -13,13 +13,18 @@ namespace cxnvmon.Helpers;
 /// </summary>
 internal static class GpuFormat
 {
-    // Metric icons — plain Unicode/emoji (NOT Nerd Font). SharpConsoleUI handles wide glyphs
-    // correctly (wide-continuation cells), so these render and align properly.
+    // Metric icons — plain Unicode, NOT Nerd Font.
+    //
+    // Memory and fan are geometric rather than emoji: U+25A6 reads as a grid of memory cells, and
+    // U+274B is literally named a propeller. Both are single-width and MONOCHROME, so they inherit the
+    // threshold colour like the gear does, where a colour emoji stays stubbornly multicoloured. The
+    // brain emoji it replaces also rendered without its wide-continuation cell here, so its bar started
+    // a column left of the others — see IconCell for why widths have to be normalised regardless.
     public const string IconUtil = "⚙";
-    public const string IconMem = "🧠";
+    public const string IconMem = "▦";
     public const string IconTemp = "🌡";
     public const string IconPower = "⚡";
-    public const string IconFan = "🌀";
+    public const string IconFan = "❋";
     public const string IconMedia = "🎬";
 
     /// <summary>An "&lt;icon&gt; &lt;value&gt;" fragment: icon plus a threshold-coloured value.</summary>
