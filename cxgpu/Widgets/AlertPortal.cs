@@ -1,3 +1,4 @@
+using cxgpu.Gpu.Alerts;
 using cxgpu.Helpers;
 using SharpConsoleUI;
 using SharpConsoleUI.Builders;
@@ -36,11 +37,32 @@ internal static class AlertPortal
     /// <summary>Whether the portal is currently showing (drives the status-bar item's state).</summary>
     public static bool IsOpen => _open != null;
 
+    // The engine whose events are being shown, remembered so the portal can rebuild itself when
+    // events change while it is open.
+    private static AlertEngine? _engine;
+
+    /// <summary>
+    /// Rebuilds an open portal from the current event list. No-op when closed.
+    ///
+    /// Rebuilds rather than mutates because the row count changes with the event list, and the portal
+    /// is sized to its content — so callers should only invoke this when something actually changed.
+    /// </summary>
+    public static void Refresh(ConsoleWindowSystem ws, AlertEngine engine)
+    {
+        if (_open == null) return;
+
+        ws.DesktopPortalService.RemovePortal(_open);
+        _open = null;
+
+        // Bypasses the reopen guard deliberately: this is a refresh, not a click.
+        Open(ws, engine);
+    }
+
     /// <summary>
     /// Toggles the portal. Safe to call from a status-bar click handler, which is what the two guards
     /// below exist for.
     /// </summary>
-    public static void Toggle(ConsoleWindowSystem ws)
+    public static void Toggle(ConsoleWindowSystem ws, AlertEngine engine)
     {
         // A second press closes it.
         if (_open != null)
@@ -58,7 +80,14 @@ internal static class AlertPortal
         // One portal at a time. No-op when none is open.
         PortalHost.CloseAll(ws);
 
-        var rows = StubRows();
+        Open(ws, engine);
+    }
+
+    private static void Open(ConsoleWindowSystem ws, AlertEngine engine)
+    {
+        _engine = engine;
+
+        var rows = Rows(engine);
         int height = Math.Clamp(rows.Count + Chrome, Chrome + 1, MaxRows + Chrome);
         var rect = PortalHost.AnchorAbove(ws, Width, height);
 
@@ -97,19 +126,35 @@ internal static class AlertPortal
         _open = null;
     }
 
-    // Placeholder content, replaced by the engine's event list in step 3. Deliberately shaped like
-    // real events (a resolved one included) so the layout is exercised at its real width.
-    private static List<(string Time, string Gpu, string Text)> StubRows()
+    /// <summary>
+    /// The event rows, newest first. Active and resolved BOTH appear: the throttle chips already show
+    /// what is happening now and vanish when it clears, so keeping resolved events here is the entire
+    /// reason this list exists — "did it throttle while I was at lunch?" is otherwise unanswerable.
+    /// </summary>
+    private static List<(string Time, string Gpu, string Text)> Rows(AlertEngine engine)
     {
         var muted = UIConstants.MutedText.ToMarkup();
-        var critical = UIConstants.Critical.ToMarkup();
-        var warning = UIConstants.Warning.ToMarkup();
+        var rows = new List<(string, string, string)>();
+        var now = DateTime.UtcNow;
 
-        return new List<(string, string, string)>
+        foreach (var e in engine.History.Take(MaxRows))
         {
-            ("17:42:10", "GPU 0", $"[{critical}]thermal throttle[/]"),
-            ("17:39:55", "GPU 1", $"[{warning}]power cap[/]"),
-            ("17:31:02", "GPU 0", $"[{muted}]VRAM 94% — resolved[/]"),
-        };
+            var colour = e.Severity == EventSeverity.Critical
+                ? UIConstants.Critical.ToMarkup()
+                : UIConstants.Warning.ToMarkup();
+
+            // Resolved rows are dimmed rather than dropped, and carry how long the condition lasted —
+            // the duration is usually more informative than the moment it started.
+            var text = e.IsActive
+                ? $"[{colour}]{e.Description}[/]"
+                : $"[{muted}]{e.Description} — {GpuFormat.Duration(e.Duration(now))}[/]";
+
+            rows.Add((e.RaisedAt.ToLocalTime().ToString("HH:mm:ss"), $"GPU {e.GpuIndex}", text));
+        }
+
+        if (rows.Count == 0)
+            rows.Add(("", "", $"[{muted}]No alerts this session[/]"));
+
+        return rows;
     }
 }

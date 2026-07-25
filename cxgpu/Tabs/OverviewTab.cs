@@ -231,14 +231,8 @@ internal class OverviewTab : BaseResponsiveTab
         return ticks;
     }
 
-    // Seconds -> compact delta: "45s", "2m", "1m30s", "1h".
-    private static string FormatDelta(double seconds)
-    {
-        int s = (int)Math.Round(seconds);
-        if (s < 60) return $"{s}s";
-        if (s < 3600) { int m = s / 60, r = s % 60; return r == 0 ? $"{m}m" : $"{m}m{r}s"; }
-        int h = s / 3600, mm = (s % 3600) / 60; return mm == 0 ? $"{h}h" : $"{h}h{mm}m";
-    }
+    // Lifted to GpuFormat.Duration so the alert list formats durations identically.
+    private static string FormatDelta(double seconds) => GpuFormat.Duration(seconds);
 
     // One-line hero vitals — an at-a-glance summary with per-metric icons and threshold coloring
     // (green → yellow → red with load), so the whole GPU state reads instantly.

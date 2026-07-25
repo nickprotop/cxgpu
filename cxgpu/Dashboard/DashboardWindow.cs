@@ -1,12 +1,14 @@
 using cxgpu.Configuration;
 using cxgpu.Helpers;
 using cxgpu.Gpu;
+using cxgpu.Gpu.Alerts;
 using cxgpu.Tabs;
 using cxgpu.Widgets;
 using SharpConsoleUI;
 using SharpConsoleUI.Animation;
 using SharpConsoleUI.Builders;
 using SharpConsoleUI.Configuration;
+using SharpConsoleUI.Core;
 using SharpConsoleUI.Controls;
 using SharpConsoleUI.Layout;
 using SharpConsoleUI.Helpers;
@@ -33,6 +35,12 @@ internal sealed class DashboardWindow
     // The alert-center status-bar item, mutated in place as events fire (see UpdateAlertBadge).
     private StatusBarItem? _alertItem;
 
+    private readonly AlertEngine _alerts;
+
+    // Live toast ids keyed by condition, so at most one toast exists per (gpu, metric) — an
+    // oscillating card would otherwise stack sticky toasts until the screen is unusable.
+    private readonly Dictionary<(int, EventMetric), string> _alertToasts = new();
+
     public DashboardWindow(
         ConsoleWindowSystem windowSystem,
         IGpuStatsProvider stats,
@@ -41,6 +49,11 @@ internal sealed class DashboardWindow
         _windowSystem = windowSystem;
         _stats = stats;
         _config = config;
+
+        // Thresholds are resolved per card through the config (card -> vendor -> built-in default)
+        // rather than baked into the engine, so a user override takes effect without the engine
+        // knowing config exists.
+        _alerts = new AlertEngine(config.Alerts.ResolveFor);
     }
 
     private GpuBackendRegistry? Registry => _stats as GpuBackendRegistry;
@@ -351,7 +364,7 @@ internal sealed class DashboardWindow
             Shortcut = "!",
             Label = "Alerts",
             IsVisible = false,
-            OnClick = () => AlertPortal.Toggle(_windowSystem)
+            OnClick = () => AlertPortal.Toggle(_windowSystem, _alerts)
         };
 
         var statusBar = builder
@@ -375,39 +388,91 @@ internal sealed class DashboardWindow
     #endregion
 
     /// <summary>
+    /// Folds a snapshot into the alert engine, then reflects the result in the badge, the portal and
+    /// any toasts. Called once per refresh from the update loop, on the UI thread.
+    /// </summary>
+    private void UpdateAlerts(GpuSnapshot snapshot)
+    {
+        if (!_config.Alerts.Enabled) return;
+
+        var changes = _alerts.Evaluate(snapshot, _stats.ReadDeviceInfo(), DateTime.UtcNow);
+
+        UpdateAlertBadge();
+        ShowAlertToasts(changes);
+
+        // Only rebuild the open portal when something actually changed — it is rebuilt from scratch,
+        // and doing that every tick would fight the user's scroll position.
+        if (changes.Any && AlertPortal.IsOpen)
+            AlertPortal.Refresh(_windowSystem, _alerts);
+    }
+
+    /// <summary>
     /// Shows the alert item with a count and severity colour, or hides it when nothing is active.
-    ///
-    /// SKELETON: counts currently-throttling GPUs, which is the one event source that already exists.
-    /// The alert engine replaces this source in step 3 — the item, the colour rule and the visibility
-    /// rule stay as they are.
     ///
     /// Hidden at zero on purpose: chrome that is always present stops carrying information, and the
     /// point of a badge is that its appearance means something happened.
     /// </summary>
-    private void UpdateAlertBadge(GpuSnapshot snapshot)
+    private void UpdateAlertBadge()
     {
         if (_alertItem == null) return;
 
-        var fleet = FleetSummary.From(snapshot);
-        int count = fleet.Throttling.Count;
-
+        int count = _alerts.Active.Count;
         if (count == 0)
         {
             _alertItem.IsVisible = false;
             return;
         }
 
-        // Thermal and hardware slowdowns are Critical; a software power cap is expected behaviour at
-        // the limit and stays Warning. Matches GpuFormat.ThrottleChip's severity rule, so the badge
-        // and the chip cannot disagree about how serious something is.
-        bool critical = fleet.Throttling.Any(t =>
-            t.Reason.Contains("thermal", StringComparison.OrdinalIgnoreCase) ||
-            t.Reason.Contains("slowdown", StringComparison.OrdinalIgnoreCase));
-
         _alertItem.IsVisible = true;
         _alertItem.Label = count == 1 ? "1 alert" : $"{count} alerts";
-        _alertItem.LabelForeground = critical ? UIConstants.Critical : UIConstants.Warning;
+        _alertItem.LabelForeground = _alerts.WorstActive == EventSeverity.Critical
+            ? UIConstants.Critical
+            : UIConstants.Warning;
     }
+
+    /// <summary>
+    /// Raises toasts for newly raised events and dismisses those of resolved ones.
+    ///
+    /// Warning toasts auto-dismiss; Critical toasts are sticky, because a thermal throttle that
+    /// scrolled past unseen defeats the point of alerting at all.
+    ///
+    /// AT MOST ONE TOAST PER (gpu, metric): a card oscillating around a threshold would otherwise
+    /// stack sticky toasts until the screen is unusable, so a new event for a condition dismisses the
+    /// previous toast for that same condition first.
+    /// </summary>
+    private void ShowAlertToasts(AlertChanges changes)
+    {
+        foreach (var e in changes.Resolved)
+            DismissAlertToast(e.Key);
+
+        foreach (var e in changes.Raised)
+        {
+            bool critical = e.Severity == EventSeverity.Critical;
+            if (critical ? !_config.Alerts.ToastOnCritical : !_config.Alerts.ToastOnWarning)
+                continue;
+
+            DismissAlertToast(e.Key);
+
+            var id = _windowSystem.ToastService.Show(
+                $"GPU {e.GpuIndex}: {e.Description}",
+                critical ? NotificationSeverity.Danger : NotificationSeverity.Warning,
+                new ToastOptions(
+                    Timeout: critical ? null : WarningToastMs,
+                    Sticky: critical,
+                    Position: ToastPosition.BottomRight));
+
+            _alertToasts[e.Key] = id;
+        }
+    }
+
+    private void DismissAlertToast((int, EventMetric) key)
+    {
+        if (!_alertToasts.TryGetValue(key, out var id)) return;
+        _windowSystem.ToastService.Dismiss(id);
+        _alertToasts.Remove(key);
+    }
+
+    private const int WarningToastMs = 6000;
 
     #region Update Loop
 
@@ -427,7 +492,7 @@ internal sealed class DashboardWindow
 
                     UpdateActiveTab(snapshot);
                     UpdateBottomStats(window, snapshot);
-                    UpdateAlertBadge(snapshot);
+                    UpdateAlerts(snapshot);
                 });
             }
             catch (Exception ex)

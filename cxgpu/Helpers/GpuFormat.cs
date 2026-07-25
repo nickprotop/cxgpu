@@ -141,6 +141,21 @@ internal static class GpuFormat
     private static readonly char[] BrailleColumns = { '⠀', '⡀', '⡄', '⡆', '⡇' };
 
     /// <summary>
+    /// Seconds -> compact delta: "45s", "2m", "1m30s", "1h". Shared by the sparkline time axis and the
+    /// alert list so a duration reads the same wherever it appears.
+    /// </summary>
+    public static string Duration(double seconds)
+    {
+        int s = (int)Math.Round(seconds);
+        if (s < 60) return $"{s}s";
+        if (s < 3600) { int m = s / 60, r = s % 60; return r == 0 ? $"{m}m" : $"{m}m{r}s"; }
+        int h = s / 3600, mm = (s % 3600) / 60; return mm == 0 ? $"{h}h" : $"{h}h{mm}m";
+    }
+
+    /// <inheritdoc cref="Duration(double)"/>
+    public static string Duration(TimeSpan span) => Duration(span.TotalSeconds);
+
+    /// <summary>
     /// An inline braille gauge: <paramref name="cells"/> cells x four dot-levels, so four cells give
     /// 16 steps over 0-100%. A pre-attentive height cue that can be scanned for "which one is hot"
     /// without reading any digits.

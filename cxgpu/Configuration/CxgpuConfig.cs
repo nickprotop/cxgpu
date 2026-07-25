@@ -43,6 +43,9 @@ internal sealed class CxgpuConfig
     /// </summary>
     public Dictionary<string, Dictionary<string, string?>> BackendSettings { get; set; } = new();
 
+    /// <summary>Alerting: thresholds, and how loudly events are surfaced.</summary>
+    public AlertConfig Alerts { get; set; } = new();
+
     [JsonIgnore]
     public static CxgpuConfig Default => new();
 
