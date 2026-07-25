@@ -2,6 +2,7 @@ using cxgpu.Configuration;
 using cxgpu.Helpers;
 using cxgpu.Gpu;
 using cxgpu.Tabs;
+using cxgpu.Widgets;
 using SharpConsoleUI;
 using SharpConsoleUI.Animation;
 using SharpConsoleUI.Builders;
@@ -28,6 +29,9 @@ internal sealed class DashboardWindow
     private bool _multiGpu;
     private TabControl? _tabControl;
     private StatusBarControl? _statusBar;
+
+    // The alert-center status-bar item, mutated in place as events fire (see UpdateAlertBadge).
+    private StatusBarItem? _alertItem;
 
     public DashboardWindow(
         ConsoleWindowSystem windowSystem,
@@ -339,8 +343,20 @@ internal sealed class DashboardWindow
         if (_config.ShowProcessesTab)
             builder.AddLeft("F3", "Processes", () => SelectTab<ProcessesTab>());
 
+        // The alert item. Held as a field so its label and colour can be updated live as events fire,
+        // rather than rebuilding the bar. Starts hidden: an empty alert center is not worth a slot,
+        // and chrome that is always present stops meaning anything.
+        _alertItem = new StatusBarItem
+        {
+            Shortcut = "!",
+            Label = "Alerts",
+            IsVisible = false,
+            OnClick = () => AlertPortal.Toggle(_windowSystem)
+        };
+
         var statusBar = builder
             .AddLeftSeparator()
+            .AddLeft(_alertItem)
             .AddLeft("?", "Help", OpenHelp)
             .AddLeft("F9", "Settings", OpenSettings)
             .AddLeft("F10", "Exit", () => _windowSystem.Shutdown())
@@ -357,6 +373,41 @@ internal sealed class DashboardWindow
     }
 
     #endregion
+
+    /// <summary>
+    /// Shows the alert item with a count and severity colour, or hides it when nothing is active.
+    ///
+    /// SKELETON: counts currently-throttling GPUs, which is the one event source that already exists.
+    /// The alert engine replaces this source in step 3 — the item, the colour rule and the visibility
+    /// rule stay as they are.
+    ///
+    /// Hidden at zero on purpose: chrome that is always present stops carrying information, and the
+    /// point of a badge is that its appearance means something happened.
+    /// </summary>
+    private void UpdateAlertBadge(GpuSnapshot snapshot)
+    {
+        if (_alertItem == null) return;
+
+        var fleet = FleetSummary.From(snapshot);
+        int count = fleet.Throttling.Count;
+
+        if (count == 0)
+        {
+            _alertItem.IsVisible = false;
+            return;
+        }
+
+        // Thermal and hardware slowdowns are Critical; a software power cap is expected behaviour at
+        // the limit and stays Warning. Matches GpuFormat.ThrottleChip's severity rule, so the badge
+        // and the chip cannot disagree about how serious something is.
+        bool critical = fleet.Throttling.Any(t =>
+            t.Reason.Contains("thermal", StringComparison.OrdinalIgnoreCase) ||
+            t.Reason.Contains("slowdown", StringComparison.OrdinalIgnoreCase));
+
+        _alertItem.IsVisible = true;
+        _alertItem.Label = count == 1 ? "1 alert" : $"{count} alerts";
+        _alertItem.LabelForeground = critical ? UIConstants.Critical : UIConstants.Warning;
+    }
 
     #region Update Loop
 
@@ -376,6 +427,7 @@ internal sealed class DashboardWindow
 
                     UpdateActiveTab(snapshot);
                     UpdateBottomStats(window, snapshot);
+                    UpdateAlertBadge(snapshot);
                 });
             }
             catch (Exception ex)
