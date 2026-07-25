@@ -21,16 +21,37 @@ internal static class GpuStatsFactory
         // single-GPU machine, or with no NVIDIA hardware at all. Off in normal use.
         var fakeCount = FakeMultiGpuStatsProvider.ConfiguredCount(args);
         if (fakeCount.HasValue)
-            return new FakeMultiGpuStatsProvider(fakeCount.Value);
-
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
-            return new NvidiaSmiGpuStatsProvider();
+            // Demo mode loads ONLY the demo backend — real vendors are not probed — so the
+            // "DEMO · N simulated GPUs" header cannot be showing a mix of real and synthetic data.
+            return new GpuBackendRegistry(new[] { DemoBackendCandidate(fakeCount.Value) });
         }
 
-        // For now, we only implement Linux with nvidia-smi
-        throw new PlatformNotSupportedException("Only Linux with nvidia-smi is currently supported.");
+        return new GpuBackendRegistry(VendorCandidates());
     }
+
+    /// <summary>
+    /// The vendor backends to probe, in the order that fixes GPU numbering (NVIDIA first, so the
+    /// discrete card stays index 0 on a hybrid machine). Probing is what decides which survive, so
+    /// listing a backend here is not a claim that it is present.
+    /// </summary>
+    private static IEnumerable<IGpuBackend> VendorCandidates()
+    {
+        yield return new LegacyProviderBackend(
+            new NvidiaSmiGpuStatsProvider(),
+            new GpuBackendInfo("NVIDIA", "NVIDIA", "nvidia-smi"),
+            new GpuCapabilities(
+                FanSpeed: true, PowerLimit: true, ThrottleReasons: true, EncoderDecoder: true,
+                PerProcessMemory: true, PerProcessSm: true, ProcessSignal: true, CudaVersion: true));
+    }
+
+    private static IGpuBackend DemoBackendCandidate(int gpuCount) =>
+        new LegacyProviderBackend(
+            new FakeMultiGpuStatsProvider(gpuCount),
+            new GpuBackendInfo("Demo", "Demo", "synthetic"),
+            new GpuCapabilities(
+                FanSpeed: true, PowerLimit: true, ThrottleReasons: true, EncoderDecoder: true,
+                PerProcessMemory: true, PerProcessSm: true, ProcessSignal: false, CudaVersion: true));
 
     /// <summary>
     /// Gets a human-readable name for the current platform. In demo mode this says so explicitly —
