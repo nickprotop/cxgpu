@@ -222,6 +222,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
                 .WithLabel(IconUtil).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
+                .WithAnimatedValue()
                 .Build());
             utilCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             utilCard.AddControl(new SparklineBuilder()
@@ -251,6 +252,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
                 .WithLabel(IconMem).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
+                .WithAnimatedValue()
                 .Build());
             memCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             memCard.AddControl(new SparklineBuilder()
@@ -280,6 +282,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
                 .WithLabel(IconTemp).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
+                .WithAnimatedValue()
                 .Build());
             tempCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             tempCard.AddControl(new SparklineBuilder()
@@ -309,6 +312,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
                 .WithLabel(IconPower).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
+                .WithAnimatedValue()
                 .Build());
             powerCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             powerCard.AddControl(new SparklineBuilder()
@@ -338,6 +342,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
                 .WithLabel(IconFan).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
                 .ShowValue()
+                .WithAnimatedValue()
                 .Build());
             fanCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             fanCard.AddControl(new SparklineBuilder()

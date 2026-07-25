@@ -182,19 +182,6 @@ internal sealed class DashboardWindow
         _tabControl = builder.Build();
         _tabControl.ActiveTabIndex = OverviewTabIndex;
         _tabControl.BackgroundColor = UIConstants.BaseBg;
-        _tabControl.TabChanged += (sender, e) =>
-        {
-            _windowSystem.Animations.Animate(
-                1.0f, 0.0f,
-                TimeSpan.FromMilliseconds(UIConstants.FadeInMs),
-                easing: EasingFunctions.EaseInOut,
-                onUpdate: intensity =>
-                {
-                },
-                onComplete: () =>
-                {
-                });
-        };
         mainWindow.AddControl(_tabControl);
     }
 
