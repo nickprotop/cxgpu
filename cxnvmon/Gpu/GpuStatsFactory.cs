@@ -19,12 +19,12 @@ internal static class GpuStatsFactory
         // Demo mode (--demo[=n], or CXNVMON_FAKE_GPUS=n) substitutes a synthetic multi-GPU provider
         // so the multi-GPU UI — summary strip, selector, throttle chip — can be exercised on a
         // single-GPU machine, or with no NVIDIA hardware at all. Off in normal use.
-        var fakeCount = FakeMultiGpuStatsProvider.ConfiguredCount(args);
+        var fakeCount = DemoBackend.ConfiguredCount(args);
         if (fakeCount.HasValue)
         {
             // Demo mode loads ONLY the demo backend — real vendors are not probed — so the
             // "DEMO · N simulated GPUs" header cannot be showing a mix of real and synthetic data.
-            return new GpuBackendRegistry(new[] { DemoBackendCandidate(fakeCount.Value) });
+            return new GpuBackendRegistry(new IGpuBackend[] { new DemoBackend(fakeCount.Value) });
         }
 
         return new GpuBackendRegistry(VendorCandidates());
@@ -43,14 +43,6 @@ internal static class GpuStatsFactory
         yield return new AmdBackend();
     }
 
-    private static IGpuBackend DemoBackendCandidate(int gpuCount) =>
-        new LegacyProviderBackend(
-            new FakeMultiGpuStatsProvider(gpuCount),
-            new GpuBackendInfo("Demo", "Demo", "synthetic"),
-            new GpuCapabilities(
-                FanSpeed: true, PowerLimit: true, ThrottleReasons: true, EncoderDecoder: true,
-                PerProcessMemory: true, PerProcessSm: true, ProcessSignal: false, CudaVersion: true));
-
     /// <summary>
     /// Gets a human-readable name for the current platform. In demo mode this says so explicitly —
     /// the numbers on screen are synthetic, and the header is the one place that can't be mistaken.
@@ -58,10 +50,10 @@ internal static class GpuStatsFactory
     public static string GetPlatformName(string[]? args = null)
     {
         var demo = args != null
-            ? FakeMultiGpuStatsProvider.ConfiguredCount(args)
-            : FakeMultiGpuStatsProvider.ActiveCount;
+            ? DemoBackend.ConfiguredCount(args)
+            : DemoBackend.ActiveCount;
         if (demo.HasValue)
-            return $"DEMO · {Math.Clamp(demo.Value, 1, FakeMultiGpuStatsProvider.MaxDemoGpuCount)} simulated GPUs";
+            return $"DEMO · {Math.Clamp(demo.Value, 1, DemoBackend.MaxDemoGpuCount)} simulated GPUs";
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             return "Linux (NVIDIA)";

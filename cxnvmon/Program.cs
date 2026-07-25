@@ -74,8 +74,8 @@ internal class Program
               cxnvmon [options]
 
             Options:
-              --demo[=N]      Run against N simulated GPUs (default {FakeMultiGpuStatsProvider.DefaultDemoGpuCount},
-                              max {FakeMultiGpuStatsProvider.MaxDemoGpuCount}) instead of real hardware. Useful for
+              --demo[=N]      Run against N simulated GPUs (default {DemoBackend.DefaultDemoGpuCount},
+                              max {DemoBackend.MaxDemoGpuCount}) instead of real hardware. Useful for
                               exercising the multi-GPU view on a single-GPU machine, or
                               with no NVIDIA driver at all. Also settable via
                               CXNVMON_FAKE_GPUS=N.

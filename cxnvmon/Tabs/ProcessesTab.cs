@@ -285,13 +285,17 @@ internal class ProcessesTab : BaseResponsiveTab
             return;
         }
 
+        // Whether the owning backend can actually deliver a signal. False for the demo backend, whose
+        // PIDs are synthetic and could otherwise collide with real processes.
+        bool canSignal = SelectedGpuCapabilities(snapshot)?.ProcessSignal ?? true;
+
         foreach (var proc in procs)
         {
             var node = new TreeNode(RowText(proc)) { Tag = proc.Pid };
 
             // Every process gets a detail child: it carries the expanded information AND guarantees
             // the node renders an expand indicator, which is what keeps all rows column-aligned.
-            AddDetailChildren(node, proc);
+            AddDetailChildren(node, proc, canSignal);
 
             // TreeNode.IsExpanded defaults to TRUE, so collapse unless the user opened this PID.
             node.IsExpanded = _expandedPids.Contains(proc.Pid);
@@ -324,24 +328,29 @@ internal class ProcessesTab : BaseResponsiveTab
     // The expanded detail: the full command path (which the truncated NAME column loses), the
     // process type, and the actions. Deliberately built from data already in the snapshot — no new
     // provider surface, nothing that can fail or need privileges.
-    private void AddDetailChildren(TreeNode node, GpuProcessSample proc)
+    private void AddDetailChildren(TreeNode node, GpuProcessSample proc, bool canSignal)
     {
         var muted = UIConstants.MutedText.ToMarkup();
         var accent = UIConstants.Accent.ToMarkup();
-        var text = UIConstants.PrimaryText.ToMarkup();
 
         node.AddChild(new TreeNode($"[{muted}]Command[/]  [{accent}]{proc.Name}[/]"));
         node.AddChild(new TreeNode(DetailStatsLine(proc)));
 
         // The action row is a node whose activation opens the signal picker: TreeControl holds text,
         // not arbitrary controls, so the buttons live in a confirm dialog rather than inline.
-        var actions = new TreeNode(
-            $"[{UIConstants.Warning.ToMarkup()}]▸ Signal this process…[/]  " +
-            $"[{muted}](Enter)[/]")
-        {
-            // Tagged distinctly so activation can tell an action row from a process row.
-            Tag = new ActionTag(proc.Pid)
-        };
+        //
+        // Backends that cannot signal (the demo backend, whose PIDs are synthetic) get a disabled
+        // notice instead of a live action — so an impossible operation is never offered, rather than
+        // being offered and then failing.
+        var actions = canSignal
+            ? new TreeNode(
+                $"[{UIConstants.Warning.ToMarkup()}]▸ Signal this process…[/]  [{muted}](Enter)[/]")
+            {
+                // Tagged distinctly so activation can tell an action row from a process row.
+                Tag = new ActionTag(proc.Pid)
+            }
+            : new TreeNode($"[{muted}]▸ Signalling not available for this GPU's data source[/]");
+
         node.AddChild(actions);
     }
 
@@ -451,6 +460,18 @@ internal class ProcessesTab : BaseResponsiveTab
     public void ShowSignalDialogForSelection()
     {
         if (_selectedPid is not int pid) return;
+
+        // The keyboard route must honour the capability too, or 'k' would bypass the disabled action
+        // row and offer to signal a synthetic PID.
+        var snapshot = _latestSnapshot ?? Stats.ReadSnapshot();
+        if (SelectedGpuCapabilities(snapshot)?.ProcessSignal == false)
+        {
+            Notify("Signalling not available",
+                "This GPU's data source cannot signal processes.",
+                NotificationSeverity.Info);
+            return;
+        }
+
         var proc = CurrentProcesses().FirstOrDefault(p => p.Pid == pid);
         if (proc != null) ShowSignalDialog(proc);
     }
