@@ -328,7 +328,7 @@ internal sealed class AmdSysfsReader : IAmdReader
     }
 
     /// <summary>Parses "912452 KiB" — fdinfo memory values carry a unit suffix.</summary>
-    private static double ParseKib(string raw)
+    internal static double ParseKib(string raw)
     {
         var text = raw.Trim();
         var number = new string(text.TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());

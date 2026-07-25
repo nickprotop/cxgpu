@@ -249,7 +249,7 @@ internal class NvidiaBackend : GpuBackendPlugin, IGpuStatsProvider
     }
 
     /// <summary>Per-process engine utilization from pmon, keyed by PID. Null members mean "no data".</summary>
-    private readonly record struct PmonSample(double? Sm, double? Mem, double? Enc, double? Dec);
+    internal readonly record struct PmonSample(double? Sm, double? Mem, double? Enc, double? Dec);
 
     // Reads `nvidia-smi pmon -c 1` — a DIFFERENT call from --query-compute-apps, and the only source
     // of per-process SM/mem/enc/dec percentages.
@@ -262,11 +262,23 @@ internal class NvidiaBackend : GpuBackendPlugin, IGpuStatsProvider
     // the columns simply render blank, rather than taking down the snapshot.
     private Dictionary<int, PmonSample> ReadPmon()
     {
-        var result = new Dictionary<int, PmonSample>();
-
         try
         {
-            var lines = RunNvidiaSmi("pmon -c 1");
+            return ParsePmon(RunNvidiaSmi("pmon -c 1"));
+        }
+        catch
+        {
+            return new Dictionary<int, PmonSample>();
+        }
+    }
+
+    // Pure parse, split out from the process invocation above so it can be exercised against captured
+    // pmon output from drivers we don't have hardware for (the 7-column and 9-column layouts).
+    internal static Dictionary<int, PmonSample> ParsePmon(IReadOnlyList<string> lines)
+    {
+        var result = new Dictionary<int, PmonSample>();
+
+        {
             if (lines.Count == 0) return result;
 
             // Column name -> field position, taken from the first header line ("# gpu pid type sm ...").
@@ -311,9 +323,6 @@ internal class NvidiaBackend : GpuBackendPlugin, IGpuStatsProvider
                     Enc: Field(fields, "enc"),
                     Dec: Field(fields, "dec"));
             }
-        }
-        catch
-        {
         }
 
         return result;
