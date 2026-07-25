@@ -37,7 +37,10 @@ internal static class GpuStatsFactory
     /// </summary>
     private static IEnumerable<IGpuBackend> VendorCandidates()
     {
+        // Order fixes GPU numbering: NVIDIA first, so a discrete card stays index 0 on a hybrid
+        // machine and the selected GPU does not move between runs.
         yield return new NvidiaBackend();
+        yield return new AmdBackend();
     }
 
     private static IGpuBackend DemoBackendCandidate(int gpuCount) =>
