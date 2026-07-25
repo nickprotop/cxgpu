@@ -26,12 +26,21 @@ internal static class UIConstants
     public static readonly Color LeftPanelBg = new(0x0e, 0x16, 0x20, 178);
     public static readonly Color CardBg = new(0x14, 0x1c, 0x28, 180);
 
-    // Multi-GPU summary-strip tiles. Each tile is a background slab so it reads as a discrete
-    // object instead of text in a stream: unselected slabs sit RECESSED (darker than CardBg) and the
-    // selected slab is LIFTED (lighter, nudged toward the cyan accent), which is what carries the
-    // selection at a glance — the "▌" marker alone was too small a cue.
-    public static readonly Color TileBg = new(0x10, 0x16, 0x20);
+    // Multi-GPU summary-strip tiles. Each tile is a bracketed background slab, so it reads as a
+    // discrete object rather than text in a stream.
+    //
+    // Both slabs sit ABOVE the card background. Unselected tiles are RAISED, not recessed: a tile is
+    // clickable, and a recessed surface reads as inert while a raised one reads as a control. The
+    // selected slab is lifted further and nudged toward the cyan accent, so it still clearly wins.
+    public static readonly Color TileBg = new(0x1b, 0x25, 0x33);
     public static readonly Color TileSelectedBg = new(0x2b, 0x4a, 0x63);
+
+    // The enclosing glyphs on an UNSELECTED tile. Deliberately not MutedText: the enclosure is the
+    // tile's only structural edge, so it has to read as a boundary. Sits between MutedText and
+    // PrimaryText — clearly present without competing with the values inside it or with the selected
+    // tile's accent.
+    public static readonly Color TileBracket = MutedText.Mix(PrimaryText, 0.55);
+
     public static readonly Color SeparatorColor = new(0x1e, 0x2a, 0x3a);
     public static readonly Color PrimaryText = new(0xc8, 0xd4, 0xe0);
     public static readonly Color MutedText = new(0x4a, 0x60, 0x70);

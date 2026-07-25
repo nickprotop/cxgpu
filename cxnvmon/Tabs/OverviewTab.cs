@@ -316,6 +316,21 @@ internal class OverviewTab : BaseResponsiveTab
     // slabs read as separate objects rather than one continuous band.
     private const string TileGap = "  ";
 
+    // Tile enclosures. The SELECTED tile uses angle quotes (U+2039/203A) which point INWARD at the
+    // tile they belong to — a directional cue that says "this one", where a symmetric bar only says
+    // "a boundary". Unselected tiles get a heavy vertical (U+2503): a plain edge, no direction.
+    //
+    // The shapes differ, not just the colour, so the selection survives a monochrome terminal.
+    //
+    // None of these may be "[" or "]": the width used for click hit-testing comes from
+    // MarkupParser.StripLength, which would parse those as the start of a markup tag and measure the
+    // tile short, drifting every click span. All four glyphs are single-width (verified), so none can
+    // shift the columns.
+    private const string SelectedOpen = "‹";
+    private const string SelectedClose = "›";
+    private const string TileOpen = "┃";
+    private const string TileClose = "┃";
+
     // Braille dot-columns, empty through full, matching the sparklines' braille idiom so the strip's
     // inline gauge belongs to the same visual family as the graphs below it. The levels fill from the
     // BOTTOM up (⡀ → ⡄ → ⡆ → ⡇), and the empty cell is U+2800 BRAILLE PATTERN BLANK — a real blank,
@@ -369,9 +384,10 @@ internal class OverviewTab : BaseResponsiveTab
             // tiles. Ragged tiles were a big part of why the strip read as one undifferentiated run
             // of text: with alignment, a hot GPU's digits sit directly under a cool one's.
             string plain =
-                $"{(selected ? "▌" : "│")}GPU {gpu.Index}  " +
+                $"{(selected ? SelectedOpen : TileOpen)}GPU {gpu.Index}  " +
                 $"{UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%  " +
-                $"m{gpu.MemoryUsedPercent,3:F0}%  t{gpu.TemperatureC,3:F0}° ";
+                $"m{gpu.MemoryUsedPercent,3:F0}%  t{gpu.TemperatureC,3:F0}°" +
+                $"{(selected ? SelectedClose : TileClose)}";
             int width = SharpConsoleUI.Parsing.MarkupParser.StripLength(plain);
 
             // Wrap when this tile (plus its leading gap) would overflow. Never wrap the first tile
@@ -384,23 +400,36 @@ internal class OverviewTab : BaseResponsiveTab
                 row++;
             }
 
+            // The gap is plain card background — outside both slabs — so the eye reads two separate
+            // objects with space between them rather than one continuous band.
             if (column > 0)
             {
-                sb.Append($"[{muted}]{TileGap}[/]");
+                sb.Append(TileGap);
                 column += TileGap.Length;
             }
 
             // Each tile sits on its own background SLAB, which is what turns it from text-in-a-stream
-            // into a discrete object. The selected slab is lifted (lighter) and its label accented;
-            // unselected slabs are recessed below the card background. The parser keeps styles on a
-            // stack, so inner [/] tags pop back to the slab background rather than clearing it.
+            // into a discrete object. Both slabs sit ABOVE the card background — a tile is clickable,
+            // and a raised surface reads as a control where a recessed one reads as inert. The selected
+            // slab is lifted further and its label accented.
+            //
+            // The tile is ENCLOSED, which closes it on both sides so its boundary is explicit rather
+            // than inferred from spacing, and gives the slab a defined edge to fill.
+            //
+            // Square brackets were tried first and abandoned: the tile's width is measured with
+            // MarkupParser.StripLength for click hit-testing, and that reads a literal "[" as the start
+            // of a markup tag — so bracketed tiles measured short and every click span drifted. These
+            // glyphs carry no markup meaning, so they measure as ordinary characters. All are
+            // single-width (checked), so none can shift the columns.
             var slab = (selected ? UIConstants.TileSelectedBg : UIConstants.TileBg).ToMarkup();
             var labelColor = selected ? accent : UIConstants.PrimaryText.ToMarkup();
 
             // NOTE: the foreground is stated explicitly before "on" — a bare "[on <bg>]" tag takes a
             // different parser branch and did not paint the slab in practice.
             sb.Append($"[{UIConstants.PrimaryText.ToMarkup()} on {slab}]");
-            sb.Append(selected ? $"[{accent} bold]▌[/]" : $"[{muted}]│[/]");
+            sb.Append(selected
+                ? $"[{accent} bold]{SelectedOpen}[/]"
+                : $"[{UIConstants.TileBracket.ToMarkup()}]{TileOpen}[/]");
             sb.Append($"[{labelColor} bold]GPU {gpu.Index}[/]  ");
             // Utilization gets a mini-bar: a pre-attentive height cue you can scan for "which one is
             // hot" without reading any digits — the actual point of a fleet strip.
@@ -409,7 +438,10 @@ internal class OverviewTab : BaseResponsiveTab
             // Mem/temp keep single-letter prefixes instead of icons: eight repeated emoji carried no
             // distinguishing information and dominated the row visually.
             sb.Append($"[{muted}]m[/][{UIConstants.ThresholdColor(gpu.MemoryUsedPercent).ToMarkup()}]{gpu.MemoryUsedPercent,3:F0}%[/]  ");
-            sb.Append($"[{muted}]t[/][{UIConstants.ThresholdColor(gpu.TemperatureC).ToMarkup()}]{gpu.TemperatureC,3:F0}°[/] ");
+            sb.Append($"[{muted}]t[/][{UIConstants.ThresholdColor(gpu.TemperatureC).ToMarkup()}]{gpu.TemperatureC,3:F0}°[/]");
+            sb.Append(selected
+                ? $"[{accent} bold]{SelectedClose}[/]"
+                : $"[{UIConstants.TileBracket.ToMarkup()}]{TileClose}[/]");
             sb.Append("[/]");
 
             _tileSpans.Add((column, column + width, gpu.Index, row));
