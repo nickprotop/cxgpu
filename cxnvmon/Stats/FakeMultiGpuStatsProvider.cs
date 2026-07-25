@@ -2,23 +2,84 @@ namespace cxnvmon.Stats;
 
 /// <summary>
 /// Synthetic multi-GPU provider used to exercise the multi-GPU UI paths (summary strip, selector,
-/// throttle chip) on single-GPU development machines. Activated by setting
-/// <c>CXNVMON_FAKE_GPUS=&lt;n&gt;</c>; never used otherwise.
+/// throttle chip) on single-GPU machines — no NVIDIA hardware or driver required. Activated by
+/// <c>--demo[=n]</c> on the command line, or by setting <c>CXNVMON_FAKE_GPUS=n</c>; never used
+/// otherwise.
 /// </summary>
 internal sealed class FakeMultiGpuStatsProvider : IGpuStatsProvider
 {
+    /// <summary>GPU count used by <c>--demo</c> when no explicit count is given.</summary>
+    public const int DefaultDemoGpuCount = 4;
+
+    /// <summary>Upper bound on demo GPUs — the '1'-'9' direct-select keys only reach nine.</summary>
+    public const int MaxDemoGpuCount = 9;
+
     private readonly int _count;
     private int _tick;
 
-    public FakeMultiGpuStatsProvider(int count) => _count = Math.Clamp(count, 1, 9);
+    public FakeMultiGpuStatsProvider(int count) => _count = Math.Clamp(count, 1, MaxDemoGpuCount);
+
+    // Resolved once from the startup args (see ConfiguredCount) and cached, so every later caller —
+    // the factory, the platform label, the status bar — agrees on whether this is a demo run
+    // without having to thread argv through the whole app.
+    private static int? _resolvedCount;
+    private static bool _resolved;
 
     /// <summary>
-    /// Returns the configured fake GPU count from CXNVMON_FAKE_GPUS, or null when unset/invalid.
+    /// The demo GPU count settled at startup, or null in a normal (real-hardware) run.
     /// </summary>
-    public static int? ConfiguredCount()
+    public static int? ActiveCount => _resolved ? _resolvedCount : ConfiguredCount(null);
+
+    /// <summary>
+    /// Resolves the demo GPU count from the command line, falling back to the CXNVMON_FAKE_GPUS
+    /// environment variable. Returns null when demo mode isn't requested (the normal case).
+    /// Accepted forms: <c>--demo</c>, <c>--demo=6</c>, <c>--demo 6</c>.
+    /// The first call with a non-null <paramref name="args"/> latches the result for
+    /// <see cref="ActiveCount"/>.
+    /// </summary>
+    public static int? ConfiguredCount(string[]? args = null)
+    {
+        if (args != null)
+        {
+            var found = ParseArgs(args) ?? FromEnvironment();
+            _resolvedCount = found;
+            _resolved = true;
+            return found;
+        }
+
+        return _resolved ? _resolvedCount : FromEnvironment();
+    }
+
+    private static int? FromEnvironment()
     {
         var raw = Environment.GetEnvironmentVariable("CXNVMON_FAKE_GPUS");
         return int.TryParse(raw, out var n) && n > 0 ? n : null;
+    }
+
+    private static int? ParseArgs(string[] args)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (!arg.StartsWith("--demo", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // --demo=n
+            var eq = arg.IndexOf('=');
+            if (eq > 0)
+                return int.TryParse(arg[(eq + 1)..], out var inline) && inline > 0
+                    ? inline
+                    : DefaultDemoGpuCount;
+
+            if (!arg.Equals("--demo", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // --demo n  (only when the next token is a bare count, so "--demo" alone works)
+            if (i + 1 < args.Length && int.TryParse(args[i + 1], out var next) && next > 0)
+                return next;
+
+            return DefaultDemoGpuCount;
+        }
+
+        return null;
     }
 
     public GpuSnapshot ReadSnapshot()

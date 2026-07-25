@@ -12,10 +12,16 @@ internal class Program
 {
     static async Task<int> Main(string[] args)
     {
+        if (args.Any(a => a is "--help" or "-h" or "--version" or "-v"))
+        {
+            PrintUsage(args.Any(a => a is "--version" or "-v"));
+            return 0;
+        }
+
         try
         {
             var config = CxnvmonConfig.Load();
-            var stats = GpuStatsFactory.Create();
+            var stats = GpuStatsFactory.Create(args);
 
             var windowSystem = new ConsoleWindowSystem(
                 new NetConsoleDriver(RenderMode.Buffer),
@@ -25,7 +31,7 @@ internal class Program
                     InstallSynchronizationContext: true));
 
             windowSystem.PanelStateService.TopStatus =
-                $"cxnvmon - GPU Monitor ({GpuStatsFactory.GetPlatformName()})";
+                $"cxnvmon - GPU Monitor ({GpuStatsFactory.GetPlatformName(args)})";
 
             Console.CancelKeyPress += (sender, e) =>
             {
@@ -48,5 +54,42 @@ internal class Program
             ExceptionFormatter.WriteException(ex);
             return 1;
         }
+    }
+
+    private static string AppVersion =>
+        System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev";
+
+    private static void PrintUsage(bool versionOnly)
+    {
+        if (versionOnly)
+        {
+            Console.WriteLine($"cxnvmon {AppVersion}");
+            return;
+        }
+
+        Console.WriteLine($"""
+            cxnvmon {AppVersion} - NVIDIA GPU monitor (TUI)
+
+            Usage:
+              cxnvmon [options]
+
+            Options:
+              --demo[=N]      Run against N simulated GPUs (default {FakeMultiGpuStatsProvider.DefaultDemoGpuCount},
+                              max {FakeMultiGpuStatsProvider.MaxDemoGpuCount}) instead of real hardware. Useful for
+                              exercising the multi-GPU view on a single-GPU machine, or
+                              with no NVIDIA driver at all. Also settable via
+                              CXNVMON_FAKE_GPUS=N.
+              -h, --help      Show this help and exit.
+              -v, --version   Show the version and exit.
+
+            Keys:
+              F2 / F3         Overview / Processes tab
+              [ / ]           Previous / next GPU        (multi-GPU only)
+              1-9             Select GPU directly        (multi-GPU only)
+              F9              Settings
+              F10 / Esc       Quit
+
+            Config: ~/.config/cxnvmon/config.json  (delete to reset to defaults)
+            """);
     }
 }
