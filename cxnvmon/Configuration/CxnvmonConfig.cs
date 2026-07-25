@@ -28,6 +28,21 @@ internal sealed class CxnvmonConfig
     public bool ShowProcessesTab { get; set; } = true;
     public bool ShowDetailsTab { get; set; } = true;
 
+    // Per-vendor backend toggles. A disabled backend is never PROBED — no subprocess spawned, no
+    // sysfs read — so switching one off on a machine that lacks it removes even the failed launch.
+    public bool EnableNvidiaBackend { get; set; } = true;
+    public bool EnableAmdBackend { get; set; } = true;
+
+    /// <summary>
+    /// Settings declared by the backends themselves, keyed by backend name then setting key.
+    ///
+    /// Stored as a nested dictionary rather than named properties so a backend can add a setting
+    /// without changing this schema. Unknown keys are PRESERVED across save/load: a config written by
+    /// a newer build, or by a backend that is currently disabled, must survive a round-trip rather
+    /// than being silently dropped.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, string?>> BackendSettings { get; set; } = new();
+
     [JsonIgnore]
     public static CxnvmonConfig Default => new();
 
@@ -111,5 +126,10 @@ internal sealed class CxnvmonConfig
         ShowOverviewTab = ShowOverviewTab,
         ShowProcessesTab = ShowProcessesTab,
         ShowDetailsTab = ShowDetailsTab,
+        // NOTE: this method rebuilds the object field by field, so anything omitted here is silently
+        // reset to its default on every save. Add new settings to this list as well as above.
+        EnableNvidiaBackend = EnableNvidiaBackend,
+        EnableAmdBackend = EnableAmdBackend,
+        BackendSettings = BackendSettings,
     };
 }

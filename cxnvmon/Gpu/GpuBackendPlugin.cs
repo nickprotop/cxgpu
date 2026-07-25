@@ -35,6 +35,11 @@ internal abstract class GpuBackendPlugin : PluginBase, IPluginService, IGpuBacke
 
     public virtual GpuSignalResult SignalProcess(int pid, GpuSignal signal) => GpuSignalResult.NotSupported;
 
+    /// <summary>No settings by default — a backend opts in only if it genuinely has a choice to offer.</summary>
+    public virtual IReadOnlyList<PluginSetting> GetSettings() => Array.Empty<PluginSetting>();
+
+    public virtual void ApplySettings(IReadOnlyDictionary<string, string?> values) { }
+
     // --- Plugin metadata ---
 
     /// <summary>Framework plugin metadata, derived from the backend's own identity.</summary>
@@ -72,7 +77,16 @@ internal abstract class GpuBackendPlugin : PluginBase, IPluginService, IGpuBacke
                 new ServiceParameter("signal", typeof(GpuSignal), Required: true, null,
                     "Terminate (SIGTERM) or Kill (SIGKILL)")
             },
-            typeof(GpuSignalResult))
+            typeof(GpuSignalResult)),
+        new ServiceOperation("GetSettings", "Settings this backend exposes for the user to change",
+            Array.Empty<ServiceParameter>(), typeof(IReadOnlyList<PluginSetting>)),
+        new ServiceOperation("ApplySettings", "Apply stored setting values, keyed by setting key",
+            new[]
+            {
+                new ServiceParameter("values", typeof(IReadOnlyDictionary<string, string?>),
+                    Required: true, null, "Setting key -> stored value")
+            },
+            null)
     };
 
     public object? Execute(string operationName, Dictionary<string, object>? parameters = null)
@@ -93,6 +107,14 @@ internal abstract class GpuBackendPlugin : PluginBase, IPluginService, IGpuBacke
                     throw new InvalidOperationException("SignalProcess requires 'pid' and 'signal'.");
                 }
                 return SignalProcess(Convert.ToInt32(pidValue), (GpuSignal)signalValue);
+
+            case "GetSettings": return GetSettings();
+
+            case "ApplySettings":
+                if (parameters?.GetValueOrDefault("values") is not IReadOnlyDictionary<string, string?> settings)
+                    throw new InvalidOperationException("ApplySettings requires a 'values' dictionary.");
+                ApplySettings(settings);
+                return null;
 
             default:
                 throw new InvalidOperationException($"Unknown operation: {operationName}");

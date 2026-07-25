@@ -43,11 +43,51 @@ internal sealed class AmdBackend : GpuBackendPlugin
     /// field. Its main value is TESTING: it is the only way to exercise the Windows CLI path on a Linux
     /// box, where sysfs would otherwise always win.
     /// </summary>
-    private static string? ForcedMechanism =>
-        Environment.GetEnvironmentVariable("CXNVMON_AMD_READER") is { Length: > 0 } value &&
-        !value.Equals("auto", StringComparison.OrdinalIgnoreCase)
-            ? value
-            : null;
+    private string? ForcedMechanism
+    {
+        get
+        {
+            // The stored setting wins; the environment variable remains as an override that needs no
+            // config file, which is what makes it usable in scripted verification.
+            var configured = _readerSetting ?? Environment.GetEnvironmentVariable("CXNVMON_AMD_READER");
+            return configured is { Length: > 0 } value &&
+                   !value.Equals(AutoReader, StringComparison.OrdinalIgnoreCase)
+                ? value
+                : null;
+        }
+    }
+
+    private const string AutoReader = "auto";
+    private const string ReaderSettingKey = "Reader";
+
+    private string? _readerSetting;
+
+    /// <summary>
+    /// The one thing worth configuring about AMD: which mechanism reads it. On Linux with rocm-smi
+    /// installed BOTH work, so this is a real choice the user can make and cxnvmon itself cannot —
+    /// exactly the case plugin-declared settings exist for.
+    ///
+    /// Allowing rocm-smi on Linux is also a TESTING affordance: it is the only way to exercise the
+    /// Windows code path on a Linux box, where sysfs would otherwise always win.
+    /// </summary>
+    public override IReadOnlyList<PluginSetting> GetSettings() => new[]
+    {
+        new PluginSetting(
+            Key: ReaderSettingKey,
+            Label: "Data source",
+            Kind: PluginSettingKind.Choice,
+            Default: AutoReader,
+            Hint: "auto prefers sysfs on Linux (faster, and the only source with per-process data); " +
+                  "the CLI is used on Windows",
+            Options: new[] { AutoReader, "sysfs", "rocm-smi" },
+            RequiresRestart: true)
+    };
+
+    public override void ApplySettings(IReadOnlyDictionary<string, string?> values)
+    {
+        if (values.TryGetValue(ReaderSettingKey, out var reader) && !string.IsNullOrWhiteSpace(reader))
+            _readerSetting = reader.Trim();
+    }
 
     public override bool Probe()
     {

@@ -21,7 +21,7 @@ internal class Program
         try
         {
             var config = CxnvmonConfig.Load();
-            var stats = GpuStatsFactory.Create(args);
+            var stats = GpuStatsFactory.Create(args, config);
 
             var windowSystem = new ConsoleWindowSystem(
                 new NetConsoleDriver(RenderMode.Buffer),

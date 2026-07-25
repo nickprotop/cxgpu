@@ -14,7 +14,8 @@ internal static class GpuStatsFactory
     /// <exception cref="PlatformNotSupportedException">
     /// Thrown when the current platform is not supported.
     /// </exception>
-    public static IGpuStatsProvider Create(string[]? args = null)
+    public static IGpuStatsProvider Create(string[]? args = null,
+                                           Configuration.CxnvmonConfig? config = null)
     {
         // Demo mode (--demo[=n], or CXNVMON_FAKE_GPUS=n) substitutes a synthetic multi-GPU provider
         // so the multi-GPU UI — summary strip, selector, throttle chip — can be exercised on a
@@ -27,7 +28,7 @@ internal static class GpuStatsFactory
             return new GpuBackendRegistry(new IGpuBackend[] { new DemoBackend(fakeCount.Value) });
         }
 
-        return new GpuBackendRegistry(VendorCandidates());
+        return new GpuBackendRegistry(VendorCandidates(config));
     }
 
     /// <summary>
@@ -35,12 +36,40 @@ internal static class GpuStatsFactory
     /// discrete card stays index 0 on a hybrid machine). Probing is what decides which survive, so
     /// listing a backend here is not a claim that it is present.
     /// </summary>
-    private static IEnumerable<IGpuBackend> VendorCandidates()
+    private static IEnumerable<IGpuBackend> VendorCandidates(Configuration.CxnvmonConfig? config)
     {
         // Order fixes GPU numbering: NVIDIA first, so a discrete card stays index 0 on a hybrid
         // machine and the selected GPU does not move between runs.
-        yield return new NvidiaBackend();
-        yield return new AmdBackend();
+        if (config?.EnableNvidiaBackend ?? true)
+            yield return Configured(new NvidiaBackend(), config);
+
+        if (config?.EnableAmdBackend ?? true)
+            yield return Configured(new AmdBackend(), config);
+    }
+
+    /// <summary>
+    /// Feeds a backend its stored settings BEFORE it is probed. Order matters: the AMD reader choice
+    /// decides which mechanism probing even attempts, so applying settings afterwards would leave the
+    /// setting with no effect until the next restart.
+    /// </summary>
+    private static IGpuBackend Configured(IGpuBackend backend, Configuration.CxnvmonConfig? config)
+    {
+        if (config != null &&
+            config.BackendSettings.TryGetValue(backend.BackendInfo.Name, out var values) &&
+            values.Count > 0)
+        {
+            try
+            {
+                backend.ApplySettings(values);
+            }
+            catch
+            {
+                // A backend that cannot digest its stored settings still runs on its defaults; a bad
+                // config value must not remove the vendor.
+            }
+        }
+
+        return backend;
     }
 
     /// <summary>

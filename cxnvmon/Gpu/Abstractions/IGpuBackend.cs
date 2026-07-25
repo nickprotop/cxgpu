@@ -70,4 +70,18 @@ internal interface IGpuBackend
     /// <see cref="GpuSignalResult.NotSupported"/>.
     /// </summary>
     GpuSignalResult SignalProcess(int pid, GpuSignal signal);
+
+    /// <summary>
+    /// Settings this backend exposes for the user to change. Empty for backends with nothing to
+    /// configure — most of them — so the settings dialog stays as short as the situation warrants.
+    /// </summary>
+    IReadOnlyList<PluginSetting> GetSettings();
+
+    /// <summary>
+    /// Applies stored values, keyed by <see cref="PluginSetting.Key"/>. Values arrive as strings
+    /// (that is what the form produces and what is persisted); a value that fails to parse must leave
+    /// the current setting untouched rather than throwing, matching the app's tolerant-config
+    /// behaviour elsewhere. Unknown keys are ignored so a downgrade cannot break startup.
+    /// </summary>
+    void ApplySettings(IReadOnlyDictionary<string, string?> values);
 }

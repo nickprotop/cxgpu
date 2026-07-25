@@ -1,6 +1,7 @@
 using System.Globalization;
 using cxnvmon.Configuration;
 using cxnvmon.Helpers;
+using cxnvmon.Stats;
 using cxnvmon.Tabs;
 using SharpConsoleUI;
 using SharpConsoleUI.Builders;
@@ -18,7 +19,7 @@ namespace cxnvmon.Dashboard;
 internal static class SettingsDialog
 {
     private const int DialogWidth = 56;
-    private const int DialogHeight = 20;
+    private const int DialogHeight = 24;
 
     // Form field keys.
     private const string KeyRefresh = "refresh";
@@ -27,12 +28,15 @@ internal static class SettingsDialog
     private const string KeyOverview = "overview";
     private const string KeyProcesses = "processes";
     private const string KeyDetails = "details";
+    private const string KeyNvidiaBackend = "backendNvidia";
+    private const string KeyAmdBackend = "backendAmd";
 
     /// <summary>
     /// Opens the modal settings dialog seeded from <paramref name="current"/>. When the user
     /// submits, the edited config is saved to disk and passed to <paramref name="onApply"/>.
     /// </summary>
-    public static void Show(ConsoleWindowSystem windowSystem, CxnvmonConfig current, Action<CxnvmonConfig> onApply)
+    public static void Show(ConsoleWindowSystem windowSystem, CxnvmonConfig current, Action<CxnvmonConfig> onApply,
+                            IReadOnlyList<IGpuBackend>? backends = null)
     {
         var header = Controls.Markup($"[{UIConstants.Accent.ToMarkup()} bold]cxnvmon settings[/]")
             .WithMargin(1, 0, 1, 0)
@@ -42,7 +46,7 @@ internal static class SettingsDialog
             .WithMargin(1, 0, 1, 0)
             .Build();
 
-        var form = Controls.Form()
+        var formBuilder = Controls.Form()
             .AddSection("Refresh")
             .AddSlider(KeyRefresh, "Interval (ms)",
                 CxnvmonConfig.MinRefreshIntervalMs, CxnvmonConfig.MaxRefreshIntervalMs,
@@ -56,7 +60,11 @@ internal static class SettingsDialog
             .AddCheckbox(KeyTimeAxis, "Show time axis on graphs", current.ShowTimeAxis)
             .AddSection("Tabs")
             .AddCheckbox(KeyOverview, "Show Overview tab", current.ShowOverviewTab)
-            .AddCheckbox(KeyProcesses, "Show Processes tab", current.ShowProcessesTab)
+            .AddCheckbox(KeyProcesses, "Show Processes tab", current.ShowProcessesTab);
+
+        AddBackendSection(formBuilder, current, backends);
+
+        var form = formBuilder
             .WithButtons(ok: "Save")
             .Build();
 
@@ -95,6 +103,110 @@ internal static class SettingsDialog
         };
     }
 
+    // Prefix for backend-owned form fields, so they cannot collide with the app's own keys and can be
+    // told apart when collecting values back: "backend:AMD:Reader".
+    private const string BackendFieldPrefix = "backend:";
+
+    /// <summary>
+    /// Renders the Backends section: an enable checkbox per vendor, followed by that backend's OWN
+    /// declared settings.
+    ///
+    /// The loop below is the whole point of <see cref="PluginSetting"/> — the host maps a descriptor
+    /// to a form control without knowing what any of them mean, so a backend can add a setting with no
+    /// UI code here and no reflection.
+    /// </summary>
+    private static void AddBackendSection(FormBuilder form, CxnvmonConfig current,
+                                          IReadOnlyList<IGpuBackend>? backends)
+    {
+        form.AddSection("Backends");
+        form.AddCheckbox(KeyNvidiaBackend, "NVIDIA", current.EnableNvidiaBackend,
+            hint: "Disabled backends are never probed (restart to apply)");
+        form.AddCheckbox(KeyAmdBackend, "AMD", current.EnableAmdBackend);
+
+        if (backends == null) return;
+
+        foreach (var backend in backends)
+        {
+            var settings = backend.GetSettings();
+            if (settings.Count == 0) continue;
+
+            var name = backend.BackendInfo.Name;
+            var stored = current.BackendSettings.TryGetValue(name, out var values)
+                ? values
+                : new Dictionary<string, string?>();
+
+            foreach (var setting in settings)
+            {
+                var fieldKey = $"{BackendFieldPrefix}{name}:{setting.Key}";
+                var value = stored.TryGetValue(setting.Key, out var v) && v != null
+                    ? v
+                    : setting.Default?.ToString();
+
+                var label = $"{name} · {setting.Label}";
+                var hint = setting.RequiresRestart && setting.Hint != null
+                    ? $"{setting.Hint} (restart to apply)"
+                    : setting.Hint;
+
+                switch (setting.Kind)
+                {
+                    case PluginSettingKind.Bool:
+                        form.AddCheckbox(fieldKey, label,
+                            bool.TryParse(value, out var b) && b, hint);
+                        break;
+
+                    case PluginSettingKind.Int:
+                        form.AddSlider(fieldKey, label,
+                            setting.Min ?? 0, setting.Max ?? 100,
+                            double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
+                                ? d
+                                : 0,
+                            hint);
+                        break;
+
+                    case PluginSettingKind.Choice:
+                        form.AddDropdown(fieldKey, label,
+                            setting.Options ?? Array.Empty<string>(), value, hint);
+                        break;
+
+                    default:
+                        form.AddText(fieldKey, label, value ?? "", hint: hint);
+                        break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Collects backend-owned field values back into the nested config dictionary.
+    ///
+    /// Starts from the STORED dictionary rather than an empty one, so keys this build did not render —
+    /// written by a newer version, or belonging to a disabled backend — survive the round-trip instead
+    /// of being silently dropped.
+    /// </summary>
+    private static Dictionary<string, Dictionary<string, string?>> CollectBackendSettings(
+        CxnvmonConfig current, IReadOnlyDictionary<string, string?> values)
+    {
+        var result = current.BackendSettings.ToDictionary(
+            kv => kv.Key,
+            kv => new Dictionary<string, string?>(kv.Value));
+
+        foreach (var (fieldKey, value) in values)
+        {
+            if (!fieldKey.StartsWith(BackendFieldPrefix, StringComparison.Ordinal)) continue;
+
+            // backend:<name>:<settingKey>
+            var parts = fieldKey[BackendFieldPrefix.Length..].Split(':', 2);
+            if (parts.Length != 2) continue;
+
+            if (!result.TryGetValue(parts[0], out var bucket))
+                result[parts[0]] = bucket = new Dictionary<string, string?>();
+
+            bucket[parts[1]] = value;
+        }
+
+        return result;
+    }
+
     /// <summary>
     /// Builds a new config from the form's collected string values, keeping any value that fails
     /// to parse at its current setting. Checkboxes serialize as "true"/"false"; the slider as a
@@ -110,6 +222,9 @@ internal static class SettingsDialog
             ShowOverviewTab = ParseBool(values, KeyOverview, current.ShowOverviewTab),
             ShowProcessesTab = ParseBool(values, KeyProcesses, current.ShowProcessesTab),
             ShowDetailsTab = ParseBool(values, KeyDetails, current.ShowDetailsTab),
+            EnableNvidiaBackend = ParseBool(values, KeyNvidiaBackend, current.EnableNvidiaBackend),
+            EnableAmdBackend = ParseBool(values, KeyAmdBackend, current.EnableAmdBackend),
+            BackendSettings = CollectBackendSettings(current, values),
         }.Clamped();
     }
 

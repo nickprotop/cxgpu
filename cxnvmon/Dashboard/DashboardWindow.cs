@@ -184,6 +184,8 @@ internal sealed class DashboardWindow
     // which the dialog notes. Persisted config is written to disk by the dialog on Save.
     private void OpenSettings()
     {
+        // Pass the live backends so the dialog can render their own declared settings generically.
+        var backends = (_stats as GpuBackendRegistry)?.ActiveBackends;
         SettingsDialog.Show(_windowSystem, _config, updated =>
         {
             // Apply live-updatable settings in place so the running update loop picks them up.
@@ -191,7 +193,12 @@ internal sealed class DashboardWindow
             _config.ShowOverviewTab = updated.ShowOverviewTab;
             _config.ShowProcessesTab = updated.ShowProcessesTab;
             _config.ShowDetailsTab = updated.ShowDetailsTab;
-        });
+            // Backend enable/disable and backend-declared settings take effect on restart: the
+            // registry probes once at startup, so re-applying them live would not change what loaded.
+            _config.EnableNvidiaBackend = updated.EnableNvidiaBackend;
+            _config.EnableAmdBackend = updated.EnableAmdBackend;
+            _config.BackendSettings = updated.BackendSettings;
+        }, backends);
     }
 
     // Index of the Overview tab so startup always lands there — not just "tab 0", because tabs
