@@ -18,10 +18,6 @@ jobs:
             name: cxgpu-linux-x64
           - rid: linux-arm64
             name: cxgpu-linux-arm64
-          - rid: osx-x64
-            name: cxgpu-osx-x64
-          - rid: osx-arm64
-            name: cxgpu-osx-arm64
           - rid: win-x64
             name: cxgpu-win-x64.exe
           - rid: win-arm64
@@ -93,7 +89,7 @@ jobs:
           cp install.ps1 release/
           cp uninstall.sh release/
           cp uninstall.ps1 release/
-          chmod +x release/cxgpu-linux-* release/cxgpu-osx-* release/*.sh 2>/dev/null || true
+          chmod +x release/cxgpu-linux-* release/*.sh 2>/dev/null || true
 
           # Generate checksums
           cd release
@@ -130,7 +126,7 @@ jobs:
 
             ## Installation
 
-            **Linux / macOS:**
+            **Linux:**
             ```bash
             curl -fsSL https://raw.githubusercontent.com/nickprotop/cxgpu/main/install.sh | bash
             ```
@@ -146,8 +142,6 @@ jobs:
             |----------|--------|
             | Linux x64 | `cxgpu-linux-x64` |
             | Linux ARM64 | `cxgpu-linux-arm64` |
-            | macOS x64 (Intel) | `cxgpu-osx-x64` |
-            | macOS ARM64 (Apple Silicon) | `cxgpu-osx-arm64` |
             | Windows x64 | `cxgpu-win-x64.exe` |
             | Windows ARM64 | `cxgpu-win-arm64.exe` |
 

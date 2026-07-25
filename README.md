@@ -211,7 +211,7 @@ Linux `sysfs`/`hwmon`, `amd-smi`/`rocm-smi`
 
 ## Uninstall
 
-**Linux/macOS:**
+**Linux:**
 ```bash
 cxgpu-uninstall.sh
 ```

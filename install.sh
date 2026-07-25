@@ -25,15 +25,16 @@ case "$OS" in
         esac
         ;;
     Darwin)
-        case "$ARCH" in
-            x86_64)  BINARY="cxgpu-osx-x64" ;;
-            arm64)   BINARY="cxgpu-osx-arm64" ;;
-            *) echo "Error: Unsupported macOS architecture: $ARCH"; exit 1 ;;
-        esac
+        # No macOS build: there is no modern NVIDIA driver for macOS, and the AMD backend needs
+        # Linux sysfs or the ROCm CLI. A binary that installs and then reports no GPUs would be
+        # worse than declining here.
+        echo "Error: cxgpu does not support macOS."
+        echo "It needs nvidia-smi, or Linux sysfs/ROCm for AMD — none are available on macOS."
+        exit 1
         ;;
     *)
         echo "Error: Unsupported OS: $OS"
-        echo "cxgpu supports Linux and macOS. For Windows, download from GitHub Releases."
+        echo "cxgpu supports Linux and Windows. For Windows, download from GitHub Releases."
         exit 1
         ;;
 esac
