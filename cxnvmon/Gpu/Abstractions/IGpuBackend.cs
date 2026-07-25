@@ -35,8 +35,12 @@ internal enum GpuSignalResult
 /// </summary>
 internal interface IGpuBackend
 {
-    /// <summary>Identity and the resolved mechanism. Only meaningful after a successful <see cref="Probe"/>.</summary>
-    GpuBackendInfo Info { get; }
+    /// <summary>
+    /// Identity and the resolved mechanism. Only meaningful after a successful <see cref="Probe"/>.
+    /// Named BackendInfo rather than Info because <c>PluginBase</c> already declares an abstract
+    /// <c>Info</c> of a different type (<c>PluginInfo</c>), and a backend is both.
+    /// </summary>
+    GpuBackendInfo BackendInfo { get; }
 
     /// <summary>What this backend can report. May depend on which mechanism <see cref="Probe"/> selected.</summary>
     GpuCapabilities Capabilities { get; }

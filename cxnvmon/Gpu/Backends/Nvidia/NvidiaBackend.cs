@@ -3,12 +3,79 @@ using System.Globalization;
 
 namespace cxnvmon.Stats;
 
-internal class NvidiaSmiGpuStatsProvider : IGpuStatsProvider
+/// <summary>
+/// NVIDIA GPU telemetry via the <c>nvidia-smi</c> CLI. Portable across Linux and Windows: the query
+/// syntax and CSV output are identical, only the binary's location differs.
+/// </summary>
+internal class NvidiaBackend : GpuBackendPlugin, IGpuStatsProvider
 {
     // CUDA version is a driver-level constant, so it's read once (lazily, on the first
     // ReadDeviceInfo) and cached. It is NOT a --query-gpu field — it only appears in
     // `nvidia-smi -q` / the plain-output header, hence the separate call.
     private string? _cudaVersion;
+
+    // Driver version, captured during Probe so BackendInfo can report it without another call.
+    private string? _driverVersion;
+
+    public override GpuBackendInfo BackendInfo =>
+        new("NVIDIA", "NVIDIA", "nvidia-smi", _driverVersion);
+
+    /// <summary>
+    /// nvidia-smi reports everything cxnvmon displays. Per-process SM comes from `pmon`, which is a
+    /// separate call and may be unavailable — the metric is still declared supported, because when
+    /// pmon yields "-" that is reported as no-data rather than as a missing capability.
+    /// </summary>
+    public override GpuCapabilities Capabilities => new(
+        FanSpeed: true,
+        PowerLimit: true,
+        ThrottleReasons: true,
+        EncoderDecoder: true,
+        PerProcessMemory: true,
+        PerProcessSm: true,
+        ProcessSignal: true,
+        CudaVersion: true);
+
+    /// <summary>
+    /// Runs a minimal query rather than merely looking for the binary on PATH. This distinction is
+    /// not theoretical: after a driver upgrade without a module reload, nvidia-smi remains installed
+    /// but every invocation fails with "Driver/library version mismatch". Presence is not readiness.
+    /// </summary>
+    public override bool Probe()
+    {
+        try
+        {
+            var rows = RunNvidiaSmi("--query-gpu=index,driver_version --format=csv,noheader,nounits");
+            if (rows.Count == 0) return false;
+
+            var parts = rows[0].Split(',');
+            if (parts.Length >= 2)
+                _driverVersion = parts[1].Trim();
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ReadSnapshot produces samples AND processes from one set of nvidia-smi invocations, but the
+    // registry asks for them separately. Share the read across the pair so a tick costs one set of
+    // subprocesses, not two.
+    private GpuSnapshot? _pending;
+
+    public override IReadOnlyList<GpuSample> ReadSamples()
+    {
+        _pending = ReadSnapshot();
+        return _pending.Gpus;
+    }
+
+    public override IReadOnlyList<GpuProcessSample> ReadProcesses()
+    {
+        var snapshot = _pending ?? ReadSnapshot();
+        _pending = null;
+        return snapshot.Processes;
+    }
 
     public GpuSnapshot ReadSnapshot()
     {
@@ -112,7 +179,7 @@ internal class NvidiaSmiGpuStatsProvider : IGpuStatsProvider
         }
     }
 
-    public IReadOnlyList<GpuDeviceInfo> ReadDeviceInfo()
+    public override IReadOnlyList<GpuDeviceInfo> ReadDeviceInfo()
     {
         try
         {

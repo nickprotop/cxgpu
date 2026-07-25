@@ -93,6 +93,12 @@ internal sealed class DashboardWindow
         if (_mainWindow == null) return;
         var mainWindow = _mainWindow;
 
+        // Register the GPU backends as framework plugins now that the window system exists. They were
+        // constructed and probed before it did (the factory runs first), so registration is a separate
+        // step from probing. It only affects discoverability — plugin state, events, and service
+        // lookup by name — since the app reads the backends through their typed interface.
+        (_stats as GpuBackendRegistry)?.RegisterWithPluginSystem(_windowSystem);
+
         BuildTopStatusBar(mainWindow);
         mainWindow.AddControl(Controls.RuleBuilder().StickyTop().WithColor(UIConstants.SeparatorColor).Build());
 

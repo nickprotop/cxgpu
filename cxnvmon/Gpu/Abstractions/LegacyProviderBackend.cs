@@ -16,11 +16,11 @@ internal sealed class LegacyProviderBackend : IGpuBackend
     public LegacyProviderBackend(IGpuStatsProvider provider, GpuBackendInfo info, GpuCapabilities capabilities)
     {
         _provider = provider;
-        Info = info;
+        BackendInfo = info;
         Capabilities = capabilities;
     }
 
-    public GpuBackendInfo Info { get; }
+    public GpuBackendInfo BackendInfo { get; }
 
     public GpuCapabilities Capabilities { get; }
 

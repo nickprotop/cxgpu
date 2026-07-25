@@ -37,12 +37,7 @@ internal static class GpuStatsFactory
     /// </summary>
     private static IEnumerable<IGpuBackend> VendorCandidates()
     {
-        yield return new LegacyProviderBackend(
-            new NvidiaSmiGpuStatsProvider(),
-            new GpuBackendInfo("NVIDIA", "NVIDIA", "nvidia-smi"),
-            new GpuCapabilities(
-                FanSpeed: true, PowerLimit: true, ThrottleReasons: true, EncoderDecoder: true,
-                PerProcessMemory: true, PerProcessSm: true, ProcessSignal: true, CudaVersion: true));
+        yield return new NvidiaBackend();
     }
 
     private static IGpuBackend DemoBackendCandidate(int gpuCount) =>

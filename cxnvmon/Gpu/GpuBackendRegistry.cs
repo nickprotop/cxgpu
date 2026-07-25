@@ -59,7 +59,7 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
                     // Registration is for discoverability only — the app reads backends directly, so a
                     // failure here must not cost us the GPU data.
                     windowSystem.LogService.LogError(
-                        $"Failed to register GPU backend '{backend.Info.Name}'", ex, "cxnvmon");
+                        $"Failed to register GPU backend '{backend.BackendInfo.Name}'", ex, "cxnvmon");
                 }
             }
         }
