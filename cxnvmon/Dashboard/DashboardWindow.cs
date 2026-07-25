@@ -135,7 +135,10 @@ internal sealed class DashboardWindow
 
     private void BuildTopStatusBar(Window mainWindow)
     {
-        var systemInfo = GpuStatsFactory.GetPlatformName();
+        // Name the vendors actually serving data rather than a hardcoded platform string: with two
+        // backends now possible, "Linux (NVIDIA)" would be wrong on an AMD-only or hybrid machine.
+        // Falls back to the platform label in demo mode (which says DEMO) or when nothing probed.
+        var systemInfo = ActiveVendorLabel() ?? GpuStatsFactory.GetPlatformName();
 
         var topStatusBar = Controls.HorizontalGrid()
             .StickyTop()
@@ -156,6 +159,23 @@ internal sealed class DashboardWindow
         topStatusBar.BackgroundColor = UIConstants.HeaderBg;
         topStatusBar.ForegroundColor = UIConstants.PrimaryText;
         mainWindow.AddControl(topStatusBar);
+    }
+
+    // "NVIDIA + AMD", or a single vendor's name — from the backends that actually probed, so the
+    // header describes this machine. Null when there is nothing to report (demo mode, or no GPU), so
+    // the caller falls back to the platform label.
+    private string? ActiveVendorLabel()
+    {
+        var backends = (_stats as GpuBackendRegistry)?.ActiveBackends;
+        if (backends == null || backends.Count == 0) return null;
+
+        var vendors = backends
+            .Select(b => b.BackendInfo.Vendor)
+            .Where(v => !string.IsNullOrWhiteSpace(v) && v != "Demo")
+            .Distinct()
+            .ToList();
+
+        return vendors.Count == 0 ? null : string.Join(" + ", vendors);
     }
 
     #endregion
