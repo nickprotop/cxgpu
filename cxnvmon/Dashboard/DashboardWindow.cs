@@ -69,7 +69,18 @@ internal sealed class DashboardWindow
                     e.Handled = true;
                     return;
                 }
+                if (e.KeyInfo.Key == ConsoleKey.F1 || e.KeyInfo.KeyChar == '?')
+                {
+                    OpenHelp();
+                    e.Handled = true;
+                    return;
+                }
                 if (HandleTabShortcut(e.KeyInfo.Key))
+                {
+                    e.Handled = true;
+                    return;
+                }
+                if (HandleProcessShortcut(e.KeyInfo))
                 {
                     e.Handled = true;
                     return;
@@ -215,6 +226,25 @@ internal sealed class DashboardWindow
         _ => false
     };
 
+    // Opens the keyboard-shortcut overlay. Told whether this host is multi-GPU so it can mark the
+    // GPU-selection keys as inapplicable rather than advertising keys that do nothing here.
+    private void OpenHelp() => HelpDialog.Show(_windowSystem, _multiGpu);
+
+    // 'k' signals the process selected in the Processes tab. Scoped to that tab: elsewhere the key
+    // has no meaning, and it must not be a global "kill something" binding.
+    private bool HandleProcessShortcut(ConsoleKeyInfo keyInfo)
+    {
+        if (keyInfo.KeyChar is not ('k' or 'K')) return false;
+        if (_tabControl == null) return false;
+
+        var i = _tabControl.ActiveTabIndex;
+        if (i < 0 || i >= _tabs.Count) return false;
+        if (_tabs[i] is not ProcessesTab processes) return false;
+
+        processes.ShowSignalDialogForSelection();
+        return true;
+    }
+
     // GPU selection keys (multi-GPU Architecture C): '[' / ']' step through the GPUs and '1'–'9'
     // jump straight to a GPU index (key '1' = GPU 0, matching how the tiles are labelled starting
     // at 0 — the digit is the ORDINAL, not the index, so '1' is the first GPU).
@@ -270,6 +300,7 @@ internal sealed class DashboardWindow
 
         var statusBar = builder
             .AddLeftSeparator()
+            .AddLeft("?", "Help", OpenHelp)
             .AddLeft("F9", "Settings", OpenSettings)
             .AddLeft("F10", "Exit", () => _windowSystem.Shutdown())
             .AddRightText(FormatStatsLegend(_stats.ReadSnapshot(), SelectedGpuIndex))

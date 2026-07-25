@@ -86,6 +86,9 @@ internal class Program
               F2 / F3         Overview / Processes tab
               [ / ]           Previous / next GPU        (multi-GPU only)
               1-9             Select GPU directly        (multi-GPU only)
+              Right / Enter   Expand a process row       (Processes tab)
+              k               Signal selected process    (Processes tab)
+              ? / F1          Keyboard shortcuts
               F9              Settings
               F10 / Esc       Quit
 

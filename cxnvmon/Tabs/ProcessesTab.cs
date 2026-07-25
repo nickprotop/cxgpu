@@ -434,6 +434,7 @@ internal class ProcessesTab : BaseResponsiveTab
         var accent = UIConstants.Accent.ToMarkup();
         var muted = UIConstants.MutedText.ToMarkup();
 
+        Window? modalRef = null;
         var modal = new WindowBuilder(WindowSystem)
             .WithTitle($"Signal process {proc.Pid}")
             .WithSize(70, 13)
@@ -445,7 +446,16 @@ internal class ProcessesTab : BaseResponsiveTab
             .Maximizable(false)
             .Closable(true)
             .WithColors(UIConstants.PrimaryText, UIConstants.BaseBg)
+            // Esc must dismiss, and must CONSUME the key: the main window binds Esc to Shutdown, so
+            // leaving it unhandled would quit the app from a dialog the user was trying to back out of.
+            .OnKeyPressed((s, e) =>
+            {
+                if (e.KeyInfo.Key != ConsoleKey.Escape) return;
+                if (modalRef != null) WindowSystem.CloseWindow(modalRef);
+                e.Handled = true;
+            })
             .Build();
+        modalRef = modal;
 
         modal.AddControl(Controls.Markup()
             .AddLine($"[{muted}]Command[/]")
@@ -509,6 +519,7 @@ internal class ProcessesTab : BaseResponsiveTab
     {
         var muted = UIConstants.MutedText.ToMarkup();
 
+        Window? modalRef = null;
         var modal = new WindowBuilder(WindowSystem)
             .WithTitle("Confirm SIGKILL")
             .WithSize(64, 11)
@@ -520,7 +531,16 @@ internal class ProcessesTab : BaseResponsiveTab
             .Maximizable(false)
             .Closable(true)
             .WithColors(UIConstants.PrimaryText, UIConstants.BaseBg)
+            // Esc cancels. On a destructive confirmation this matters most: backing out must always
+            // be possible from the keyboard, and must not fall through to the app's Esc=quit binding.
+            .OnKeyPressed((s, e) =>
+            {
+                if (e.KeyInfo.Key != ConsoleKey.Escape) return;
+                if (modalRef != null) WindowSystem.CloseWindow(modalRef);
+                e.Handled = true;
+            })
             .Build();
+        modalRef = modal;
 
         modal.AddControl(Controls.Markup()
             .AddLine($"[{UIConstants.Critical.ToMarkup()} bold]SIGKILL cannot be caught or ignored.[/]")
