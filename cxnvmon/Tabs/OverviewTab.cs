@@ -316,20 +316,17 @@ internal class OverviewTab : BaseResponsiveTab
     // slabs read as separate objects rather than one continuous band.
     private const string TileGap = "  ";
 
-    // Tile enclosures. The SELECTED tile uses angle quotes (U+2039/203A) which point INWARD at the
-    // tile they belong to — a directional cue that says "this one", where a symmetric bar only says
-    // "a boundary". Unselected tiles get a heavy vertical (U+2503): a plain edge, no direction.
+    // Tile enclosures: inward-pointing angle quotes (U+2039/203A) on EVERY tile, so each one reads as
+    // the same enclosed control and the difference between them is state rather than shape. Selection
+    // is carried by colour — full accent on the selected pair, a heavily muted accent on the rest —
+    // together with the lifted background slab.
     //
-    // The shapes differ, not just the colour, so the selection survives a monochrome terminal.
-    //
-    // None of these may be "[" or "]": the width used for click hit-testing comes from
-    // MarkupParser.StripLength, which would parse those as the start of a markup tag and measure the
-    // tile short, drifting every click span. All four glyphs are single-width (verified), so none can
-    // shift the columns.
-    private const string SelectedOpen = "‹";
-    private const string SelectedClose = "›";
-    private const string TileOpen = "┃";
-    private const string TileClose = "┃";
+    // These must not be "[" or "]": the width used for click hit-testing comes from
+    // MarkupParser.StripLength, which parses those as the start of a markup tag and would measure the
+    // tile short, drifting every click span. The angle quotes carry no markup meaning and are
+    // single-width (verified), so they cannot shift the columns.
+    private const string TileOpen = "‹";
+    private const string TileClose = "›";
 
     // Braille dot-columns, empty through full, matching the sparklines' braille idiom so the strip's
     // inline gauge belongs to the same visual family as the graphs below it. The levels fill from the
@@ -384,10 +381,10 @@ internal class OverviewTab : BaseResponsiveTab
             // tiles. Ragged tiles were a big part of why the strip read as one undifferentiated run
             // of text: with alignment, a hot GPU's digits sit directly under a cool one's.
             string plain =
-                $"{(selected ? SelectedOpen : TileOpen)}GPU {gpu.Index}  " +
+                $"{TileOpen}GPU {gpu.Index}  " +
                 $"{UtilBar(gpu.UtilizationPercent)} {gpu.UtilizationPercent,3:F0}%  " +
                 $"m{gpu.MemoryUsedPercent,3:F0}%  t{gpu.TemperatureC,3:F0}°" +
-                $"{(selected ? SelectedClose : TileClose)}";
+                $"{TileClose}";
             int width = SharpConsoleUI.Parsing.MarkupParser.StripLength(plain);
 
             // Wrap when this tile (plus its leading gap) would overflow. Never wrap the first tile
@@ -427,9 +424,8 @@ internal class OverviewTab : BaseResponsiveTab
             // NOTE: the foreground is stated explicitly before "on" — a bare "[on <bg>]" tag takes a
             // different parser branch and did not paint the slab in practice.
             sb.Append($"[{UIConstants.PrimaryText.ToMarkup()} on {slab}]");
-            sb.Append(selected
-                ? $"[{accent} bold]{SelectedOpen}[/]"
-                : $"[{UIConstants.TileBracket.ToMarkup()}]{TileOpen}[/]");
+            var enclosure = selected ? $"{accent} bold" : UIConstants.TileBracket.ToMarkup();
+            sb.Append($"[{enclosure}]{TileOpen}[/]");
             sb.Append($"[{labelColor} bold]GPU {gpu.Index}[/]  ");
             // Utilization gets a mini-bar: a pre-attentive height cue you can scan for "which one is
             // hot" without reading any digits — the actual point of a fleet strip.
@@ -439,9 +435,7 @@ internal class OverviewTab : BaseResponsiveTab
             // distinguishing information and dominated the row visually.
             sb.Append($"[{muted}]m[/][{UIConstants.ThresholdColor(gpu.MemoryUsedPercent).ToMarkup()}]{gpu.MemoryUsedPercent,3:F0}%[/]  ");
             sb.Append($"[{muted}]t[/][{UIConstants.ThresholdColor(gpu.TemperatureC).ToMarkup()}]{gpu.TemperatureC,3:F0}°[/]");
-            sb.Append(selected
-                ? $"[{accent} bold]{SelectedClose}[/]"
-                : $"[{UIConstants.TileBracket.ToMarkup()}]{TileClose}[/]");
+            sb.Append($"[{enclosure}]{TileClose}[/]");
             sb.Append("[/]");
 
             _tileSpans.Add((column, column + width, gpu.Index, row));
