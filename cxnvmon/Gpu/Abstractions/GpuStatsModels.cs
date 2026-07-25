@@ -24,7 +24,23 @@ internal record GpuSample(
     // idle card and would cry wolf.
     bool ThrottleThermal = false,
     bool ThrottlePower = false,
-    bool ThrottleHwSlowdown = false);
+    bool ThrottleHwSlowdown = false,
+    // What the owning backend can actually report, stamped on by the registry.
+    //
+    // Several metrics above are non-nullable doubles, so a vendor with no such sensor can only put 0
+    // there — and a rendered "0%" would claim a measurement that was never taken. This carries the
+    // truth alongside the numbers: the AMD APU has no fan and no power cap, so its cards for those
+    // metrics are omitted rather than drawn at zero. Defaults to everything supported, which keeps
+    // the single-vendor NVIDIA path (and every existing construction site) behaving as before.
+    GpuCapabilities? Capabilities = null)
+{
+    /// <summary>Capabilities of the owning backend, defaulting to "everything supported".</summary>
+    public GpuCapabilities Caps => Capabilities ?? AllSupported;
+
+    private static readonly GpuCapabilities AllSupported = new(
+        FanSpeed: true, PowerLimit: true, ThrottleReasons: true, EncoderDecoder: true,
+        PerProcessMemory: true, PerProcessSm: true, ProcessSignal: true, CudaVersion: true);
+}
 
 /// <summary>
 /// Information about a process running on a GPU. The per-engine percentages come from
@@ -61,4 +77,10 @@ internal record GpuDeviceInfo(
     string CudaVersion,
     double MemoryTotalMb,
     double PowerLimitWatts,
-    double TemperatureLimitC);
+    double TemperatureLimitC,
+    // Which backend and data source produced this, stamped on by the registry. Surfaced in the
+    // spec-sheet because a vendor can be read several ways (AMD via sysfs or the rocm-smi CLI) and
+    // the numbers differ subtly between them — so "which source is live" has to be answerable
+    // without attaching a debugger.
+    string Backend = "",
+    string Mechanism = "");

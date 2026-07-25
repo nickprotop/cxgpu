@@ -91,11 +91,51 @@ internal class OverviewTab : BaseResponsiveTab
         var gpus = Stats.ReadSnapshot().Gpus;
         if (gpus.All(g => g.Index != gpuIndex)) return false;
 
+        var previousCaps = gpus.FirstOrDefault(g => g.Index == _selectedGpuIndex)?.Caps;
         _selectedGpuIndex = gpuIndex;
+        var newCaps = gpus.FirstOrDefault(g => g.Index == gpuIndex)?.Caps;
+
+        // Switching between GPUs whose backends support DIFFERENT metrics changes which cards exist,
+        // and UpdatePanel only refreshes controls that are already there. Without a rebuild, moving
+        // from an NVIDIA card to an AMD one would leave a stale Fan card frozen at NVIDIA's last
+        // reading. Rebuild only when the capability set actually differs — the common case (same
+        // vendor, or a single vendor) still takes the cheap in-place path.
+        if (previousCaps != null && newCaps != null && previousCaps != newCaps)
+            RebuildGraphsPanel();
+
         // Repaint immediately with the new selection rather than waiting for the next refresh tick,
         // so switching feels instant.
         UpdatePanel(Stats.ReadSnapshot());
         return true;
+    }
+
+    // Discards and re-creates the cards in the graphs panel. Needed when the selected GPU's backend
+    // supports a different set of metrics, since which cards EXIST is decided at build time.
+    // (BaseResponsiveTab.TriggerRebuild only handles HorizontalGridControl, and this tab builds its
+    // own GridControl, so it cannot be reused here.)
+    private void RebuildGraphsPanel()
+    {
+        var root = FindMainWindow()?.FindControl<IWindowControl>(PanelControlName);
+        if (root == null) return;
+
+        var panel = FindGraphPanel(root);
+        if (panel == null) return;
+
+        var snapshot = Stats.ReadSnapshot();
+
+        // In the narrow layout the graph panel also holds the spec-sheet and its separator, so clearing
+        // everything would drop them. Rebuild the whole panel content for that case.
+        bool narrow = _currentLayout == ResponsiveLayoutMode.Narrow;
+
+        panel.ClearContents();
+        if (narrow)
+        {
+            AddNamedMarkupLines(panel, BuildTextContent(snapshot), SpecSheetMarkupName);
+            AddNarrowSeparator(panel);
+        }
+        BuildGraphsContent(panel, snapshot);
+
+        FindMainWindow()?.ForceRebuildLayout();
     }
 
     // X-axis provider for the history sparklines: turns the graph geometry into time-delta ticks
@@ -144,18 +184,30 @@ internal class OverviewTab : BaseResponsiveTab
 
     // One-line hero vitals — an at-a-glance summary with per-metric icons and threshold coloring
     // (green → yellow → red with load), so the whole GPU state reads instantly.
+    // Metrics the owning backend cannot measure are OMITTED rather than shown at zero: an absent fan
+    // sensor is not a fan spinning at 0%, and claiming otherwise would invent a measurement. The
+    // single-vendor NVIDIA case is unaffected — it supports everything, so nothing is dropped.
     private static string HeroVitals(GpuSample gpu)
     {
         var muted = UIConstants.MutedText.ToMarkup();
-        double powerPct = gpu.PowerLimitWatts > 0 ? gpu.PowerDrawWatts / gpu.PowerLimitWatts * 100.0 : 0.0;
-        string sep = $"[{muted}]   [/]";
+        // Power is only meaningful as a ratio when a cap is known; without one, colour it by absolute
+        // draw instead of dividing by a limit that doesn't exist.
+        double powerPct = gpu.Caps.PowerLimit && gpu.PowerLimitWatts > 0
+            ? gpu.PowerDrawWatts / gpu.PowerLimitWatts * 100.0
+            : 0.0;
 
-        return
-            Metric(IconUtil, $"{gpu.UtilizationPercent:F0}%", gpu.UtilizationPercent) + sep +
-            Metric(IconMem, $"{gpu.MemoryUsedMb / 1024.0:F1}/{gpu.MemoryTotalMb / 1024.0:F1} GB", gpu.MemoryUsedPercent) + sep +
-            Metric(IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC) + sep +
-            Metric(IconPower, $"{gpu.PowerDrawWatts:F0} W", powerPct) + sep +
-            Metric(IconFan, $"{gpu.FanSpeedPercent:F0}%", gpu.FanSpeedPercent);
+        var parts = new List<string>
+        {
+            Metric(IconUtil, $"{gpu.UtilizationPercent:F0}%", gpu.UtilizationPercent),
+            Metric(IconMem, $"{gpu.MemoryUsedMb / 1024.0:F1}/{gpu.MemoryTotalMb / 1024.0:F1} GB", gpu.MemoryUsedPercent),
+            Metric(IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC),
+            Metric(IconPower, $"{gpu.PowerDrawWatts:F0} W", powerPct)
+        };
+
+        if (gpu.Caps.FanSpeed)
+            parts.Add(Metric(IconFan, $"{gpu.FanSpeedPercent:F0}%", gpu.FanSpeedPercent));
+
+        return string.Join($"[{muted}]   [/]", parts);
     }
 
     // An "<icon> <value>" fragment: icon plus a threshold-colored value.
@@ -181,6 +233,14 @@ internal class OverviewTab : BaseResponsiveTab
         return $"{IconMedia} {Engine("enc", gpu.EncoderPercent)} {Engine("dec", gpu.DecoderPercent)}";
     }
 
+    // Full-scale value for the power bar and its sparkline. Uses the cap when the backend reports
+    // one; otherwise a fixed reference, since a device that exposes no cap (this APU) still needs a
+    // stable axis — one that rescaled with draw would make every load look identical.
+    private const double PowerScaleFallbackWatts = 100;
+
+    private static double PowerScale(GpuSample gpu) =>
+        gpu.Caps.PowerLimit && gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : PowerScaleFallbackWatts;
+
     // Throttle chip for the hero card — surfaced ONLY for real throttles (the provider already
     // filters out the benign gpu_idle / applications-clocks bits, which are "Active" on any idle
     // card). Empty string when the GPU is running unthrottled, so the chip is simply absent.
@@ -188,6 +248,11 @@ internal class OverviewTab : BaseResponsiveTab
     // protection trip); a software power cap is Warning (expected behaviour at the power limit).
     private static string ThrottleChip(GpuSample gpu)
     {
+        // Backends without named throttle-reason bits (amdgpu) always report the flags false, so no
+        // chip would appear anyway — but gating explicitly keeps "no chip" meaning "not throttling"
+        // rather than "we cannot tell".
+        if (!gpu.Caps.ThrottleReasons) return "";
+
         var reasons = new List<string>();
         if (gpu.ThrottleThermal) reasons.Add("thermal");
         if (gpu.ThrottleHwSlowdown) reasons.Add("hw slowdown");
@@ -211,11 +276,14 @@ internal class OverviewTab : BaseResponsiveTab
             titleLine += $"   {chip}";
 
         var muted = UIConstants.MutedText.ToMarkup();
-        return new List<string>
-        {
-            titleLine,
-            HeroVitals(gpu) + $"[{muted}]   [/]" + MediaEngines(gpu)
-        };
+        var vitals = HeroVitals(gpu);
+
+        // Encoder/decoder readouts only appear for backends that expose those engines — amdgpu does
+        // not, so "enc 0% dec 0%" would be fiction there.
+        if (gpu.Caps.EncoderDecoder)
+            vitals += $"[{muted}]   [/]" + MediaEngines(gpu);
+
+        return new List<string> { titleLine, vitals };
     }
 
     // === Multi-GPU summary strip (Architecture C) ==========================================
@@ -469,6 +537,10 @@ internal class OverviewTab : BaseResponsiveTab
                 var pcie = FormatPcie(d.PcieGenWidth);
                 if (pcie.Length > 0) Row("PCIe", pcie.Replace("PCIe ", ""));
                 if (!string.IsNullOrWhiteSpace(d.CudaVersion)) Row("CUDA", d.CudaVersion);
+                // The data source. Shown because a vendor can be read more than one way (AMD via
+                // sysfs or the rocm-smi CLI) and the readings differ subtly, so which one is live has
+                // to be answerable from the screen.
+                if (!string.IsNullOrWhiteSpace(d.Mechanism)) Row("Source", d.Mechanism);
             }
 
             Section("CLOCKS");
@@ -478,10 +550,19 @@ internal class OverviewTab : BaseResponsiveTab
             Section("CAPACITY");
             Row("VRAM", $"{gpu.MemoryTotalMb / 1024.0:F1}", "GB");
 
-            Section("LIMITS");
-            Row("Power", $"{(d?.PowerLimitWatts ?? gpu.PowerLimitWatts):F0}", "W");
-            if (d?.TemperatureLimitC is > 0)
-                Row("Temp", $"{d.TemperatureLimitC:F0}", "°C");
+            // The whole LIMITS section is conditional: with no power cap and no temperature limit
+            // there is nothing to report, and an empty header reads as missing data rather than as
+            // "this device exposes no limits".
+            var powerLimit = d?.PowerLimitWatts ?? gpu.PowerLimitWatts;
+            bool hasPowerLimit = gpu.Caps.PowerLimit && powerLimit > 0;
+            bool hasTempLimit = d?.TemperatureLimitC is > 0;
+
+            if (hasPowerLimit || hasTempLimit)
+            {
+                Section("LIMITS");
+                if (hasPowerLimit) Row("Power", $"{powerLimit:F0}", "W");
+                if (hasTempLimit) Row("Temp", $"{d!.TemperatureLimitC:F0}", "°C");
+            }
 
             if (!string.IsNullOrWhiteSpace(d?.VBiosVersion))
             {
@@ -626,7 +707,7 @@ internal class OverviewTab : BaseResponsiveTab
             powerCard.AddControl(new BarGraphBuilder()
                 .WithName("sel_power_bar")
                 .WithValue(gpu.PowerDrawWatts)
-                .WithMaxValue(gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : 100)
+                .WithMaxValue(PowerScale(gpu))
                 .WithAlignment(HorizontalAlignment.Stretch)
                 .WithUnfilledColor(UIConstants.BarUnfilledColor)
                 .WithLabel(IconPower).WithLabelWidth(2).WithLabelSeparator(" ").ShowLabel()
@@ -637,7 +718,7 @@ internal class OverviewTab : BaseResponsiveTab
             powerCard.AddControl(new SparklineBuilder()
                 .WithName("sel_power_spark")
                 .WithHeight(_sparklineHeight)
-                .WithMaxValue(gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : 100)
+                .WithMaxValue(PowerScale(gpu))
                 .WithMode(SparklineMode.Braille)
                 .WithAutoFitDataPoints()
                 .WithXAxis(_showTimeAxis ? TimeAxisTicks : null, _refreshSeconds)
@@ -648,9 +729,14 @@ internal class OverviewTab : BaseResponsiveTab
                 .Build());
             panel.AddControl(powerCard);
 
+            // Fan Speed — only for backends with a fan sensor. This APU has none (fan1_input is
+            // ENOENT), and a card reading a flat "0%" would assert a measurement never taken. The
+            // separator is inside the guard so omitting the card doesn't leave a stray trailing rule.
+            if (!gpu.Caps.FanSpeed)
+                return;
+
             AddSectionSeparator(panel);
 
-            // Fan Speed
             var fanCard = BuildCard($"Fan — {gpu.FanSpeedPercent:F0}%");
             fanCard.Name = "sel_fan_card";
             fanCard.AddControl(new BarGraphBuilder()

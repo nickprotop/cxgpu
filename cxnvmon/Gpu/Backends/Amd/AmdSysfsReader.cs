@@ -18,6 +18,8 @@ internal sealed class AmdSysfsReader : IAmdReader
 
     public string Mechanism => "sysfs";
 
+    public IReadOnlyList<string> MechanismAliases => new[] { "sysfs" };
+
     /// <summary>
     /// Fan is absent on this class of part (an APU has no dedicated fan, so <c>fan1_input</c> is
     /// ENOENT) and amdgpu exposes no encoder/decoder utilization or named throttle-reason bits.

@@ -135,6 +135,17 @@ internal class ProcessesTab : BaseResponsiveTab
         return procs.OrderByDescending(p => p.MemoryUsedMb).ToList();
     }
 
+    // Capabilities of the GPU whose processes are being shown, so the empty state can distinguish
+    // "nothing running" from "this source cannot tell us".
+    private GpuCapabilities? SelectedGpuCapabilities(GpuSnapshot snapshot)
+    {
+        if (snapshot.Gpus.Count == 0) return null;
+        if (!_isMultiGpu()) return snapshot.Gpus[0].Caps;
+
+        var index = _selectedGpuIndex();
+        return (snapshot.Gpus.FirstOrDefault(g => g.Index == index) ?? snapshot.Gpus[0]).Caps;
+    }
+
     private List<GpuProcessSample> CurrentProcesses() =>
         VisibleProcesses(_latestSnapshot ?? Stats.ReadSnapshot());
 
@@ -251,9 +262,24 @@ internal class ProcessesTab : BaseResponsiveTab
         if (procs.Count == 0)
         {
             var scope = _isMultiGpu() ? $" on GPU {_selectedGpuIndex()}" : "";
-            var empty = new TreeNode($"[{muted}]No compute processes{scope}[/]");
+
+            // "None running" and "we cannot tell" are different claims, and only the capability
+            // distinguishes them: reading AMD through the rocm-smi CLI yields no per-process data at
+            // all (--showpids reports nothing), so reporting "no processes" there would be a
+            // measurement we never made.
+            var caps = SelectedGpuCapabilities(snapshot);
+            bool canMeasure = caps?.PerProcessMemory ?? true;
+
+            var headline = canMeasure
+                ? $"[{muted}]No compute processes{scope}[/]"
+                : $"[{muted}]Per-process data not available{scope}[/]";
+            var detail = canMeasure
+                ? "No processes are currently using this GPU."
+                : "This GPU's data source cannot attribute usage to processes.";
+
+            var empty = new TreeNode(headline);
             // Collapse the placeholder's detail child so the empty state stays one quiet line.
-            empty.AddChild(new TreeNode($"[{muted}]nvidia-smi reports no processes using this GPU.[/]"));
+            empty.AddChild(new TreeNode($"[{muted}]{detail}[/]"));
             empty.IsExpanded = false;
             tree.AddRootNode(empty);
             return;

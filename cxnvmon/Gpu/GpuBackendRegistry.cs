@@ -94,12 +94,15 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
                 continue;
             }
 
-            // Vendor-local index -> global index for this backend.
+            // Vendor-local index -> global index for this backend. Capabilities are stamped on here,
+            // where the owning backend is known, so the UI can tell an unsupported metric from a
+            // measured zero without needing to know which vendor a card came from.
+            var capabilities = backend.Capabilities;
             var indexMap = new Dictionary<int, int>();
             foreach (var sample in samples)
             {
                 indexMap[sample.Index] = nextIndex;
-                gpus.Add(sample with { Index = nextIndex });
+                gpus.Add(sample with { Index = nextIndex, Capabilities = capabilities });
                 nextIndex++;
             }
 
@@ -134,9 +137,11 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
                 continue;
             }
 
+            var backendName = backend.BackendInfo.Name;
+            var mechanism = backend.BackendInfo.Mechanism;
             foreach (var info in backendInfos)
             {
-                infos.Add(info with { Index = nextIndex });
+                infos.Add(info with { Index = nextIndex, Backend = backendName, Mechanism = mechanism });
                 nextIndex++;
             }
         }

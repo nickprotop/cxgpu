@@ -37,13 +37,47 @@ internal sealed class AmdBackend : GpuBackendPlugin
     /// </summary>
     public override GpuCapabilities Capabilities => _reader?.Capabilities ?? new GpuCapabilities();
 
+    /// <summary>
+    /// Forces a specific mechanism by name ("sysfs", "rocm-smi", "amd-smi"), overriding the preference
+    /// order. Set from <c>CXNVMON_AMD_READER</c>; the user-facing plugin setting will feed the same
+    /// field. Its main value is TESTING: it is the only way to exercise the Windows CLI path on a Linux
+    /// box, where sysfs would otherwise always win.
+    /// </summary>
+    private static string? ForcedMechanism =>
+        Environment.GetEnvironmentVariable("CXNVMON_AMD_READER") is { Length: > 0 } value &&
+        !value.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? value
+            : null;
+
     public override bool Probe()
+    {
+        var forced = ForcedMechanism;
+
+        // First pass honours a forced mechanism; the second ignores it. A forced reader that cannot
+        // probe must NOT leave the vendor dark — falling back is better than showing no AMD GPU
+        // because of a stale setting.
+        if (forced != null && TrySelectReader(forced)) return true;
+
+        return TrySelectReader(null);
+    }
+
+    private bool TrySelectReader(string? mechanismFilter)
     {
         foreach (var factory in ReaderFactories)
         {
             try
             {
                 var candidate = factory();
+
+                // Match against the ALIASES, not the resolved Mechanism: the CLI reader does not know
+                // whether it will land on amd-smi or rocm-smi until it probes, so filtering on the
+                // resolved name would reject it before it ever looked.
+                if (mechanismFilter != null &&
+                    !candidate.MechanismAliases.Any(a => a.Equals(mechanismFilter, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
                 if (!candidate.Probe()) continue;
 
                 _reader = candidate;

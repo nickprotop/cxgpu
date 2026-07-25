@@ -15,6 +15,16 @@ internal interface IAmdReader
     /// <summary>Short name of the data source, surfaced so it is diagnosable which one is live.</summary>
     string Mechanism { get; }
 
+    /// <summary>
+    /// Every name this reader answers to, for matching a user-forced mechanism.
+    ///
+    /// Distinct from <see cref="Mechanism"/> because that reports the RESOLVED source and is only
+    /// meaningful after probing — the CLI reader cannot know whether it will end up on amd-smi or
+    /// rocm-smi until it looks. Matching a forced choice against the resolved name would therefore
+    /// reject the reader before it ever got the chance to probe.
+    /// </summary>
+    IReadOnlyList<string> MechanismAliases { get; }
+
     /// <summary>Whether this mechanism can serve data here and now. Must be cheap and must not throw.</summary>
     bool Probe();
 
