@@ -1,5 +1,6 @@
 using System.Linq;
 using cxgpu.Helpers;
+using cxgpu.Widgets;
 using cxgpu.Gpu;
 using SharpConsoleUI;
 using SharpConsoleUI.Builders;

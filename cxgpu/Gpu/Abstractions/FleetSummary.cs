@@ -1,7 +1,6 @@
 using cxgpu.Helpers;
-using cxgpu.Gpu;
 
-namespace cxgpu.Tabs;
+namespace cxgpu.Gpu;
 
 /// <summary>
 /// Aggregate view of every GPU in a snapshot — the numbers that exist nowhere else in the app, since

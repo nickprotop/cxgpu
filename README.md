@@ -171,7 +171,7 @@ cxgpu/
 ├── Program.cs                    # Entry point, CLI parsing
 ├── Configuration/                # CxgpuConfig (JSON load/save)
 ├── Gpu/
-│   ├── Abstractions/             # Models, IGpuBackend, capabilities, plugin settings
+│   ├── Abstractions/             # Models, IGpuBackend, capabilities, fleet summary, settings
 │   ├── GpuBackendRegistry.cs     # Probes backends, aggregates, assigns global GPU indices
 │   ├── GpuBackendPlugin.cs       # Backends as SharpConsoleUI plugin services
 │   ├── GpuStatsFactory.cs        # Backend selection and configuration
@@ -182,6 +182,7 @@ cxgpu/
 │       └── Demo/                 # Synthetic GPUs for --demo
 ├── Dashboard/                    # Main window, settings, help, busy indicator
 ├── Helpers/                      # UI constants, shared metric formatting, history
+├── Widgets/                      # Reusable controls (per-GPU hero panel)
 └── Tabs/                         # Overview (+ fleet dashboard), Processes
 ```
 

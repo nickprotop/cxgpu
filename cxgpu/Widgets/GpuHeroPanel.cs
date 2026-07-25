@@ -4,7 +4,7 @@ using SharpConsoleUI;
 using SharpConsoleUI.Controls;
 using SharpConsoleUI.Layout;
 
-namespace cxgpu.Tabs;
+namespace cxgpu.Widgets;
 
 /// <summary>
 /// One GPU's card on the dashboard: a bordered panel with utilization and memory bars, the
