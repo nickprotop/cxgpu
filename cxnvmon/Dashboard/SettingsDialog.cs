@@ -6,6 +6,7 @@ using SharpConsoleUI;
 using SharpConsoleUI.Builders;
 using SharpConsoleUI.Controls;
 using SharpConsoleUI.Layout;
+using SharpConsoleUI.Rendering;
 
 namespace cxnvmon.Dashboard;
 
@@ -146,6 +147,17 @@ internal static class SettingsDialog
             })
             .BuildAndShow();
         dialogRef = dialog;
+
+        // Vertical gradient behind the dialog, matching how cxfiles/cxpost treat their modals. Set on
+        // the built window rather than through the builder, which is the pattern those apps use
+        // (cxfiles OptionsModal). Uses cxnvmon's own palette rather than their literal blues, so it
+        // reads as this app — the main window already gradients BaseBg -> BaseEnd, so this stays in
+        // family while sitting a shade darker to separate the modal from what is behind it.
+        // ColorGradient is fully qualified: cxnvmon.Helpers is already imported here, so the bare name
+        // would be ambiguous with the framework's SharpConsoleUI.Helpers.
+        dialog.BackgroundGradient = new GradientBackground(
+            SharpConsoleUI.Helpers.ColorGradient.FromColors(UIConstants.BaseEnd, UIConstants.HeaderBg),
+            GradientDirection.Vertical);
 
         cancelButton.Click += (_, _) => windowSystem.CloseWindow(dialog);
         saveButton.Click += (_, _) =>
