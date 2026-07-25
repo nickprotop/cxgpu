@@ -22,12 +22,80 @@ internal class OverviewTab : BaseResponsiveTab
     private readonly double _refreshSeconds;
     private readonly bool _showTimeAxis;
 
+    // === Multi-GPU state (Architecture C: summary strip doubles as the selector) ===
+    // The Overview renders the detail (spec-sheet + hero + 5 cards) for exactly ONE GPU: the
+    // selected one. With a single GPU this is index 0 and the strip is not rendered at all, so the
+    // single-GPU presentation is identical to before. Selection is by nvidia-smi GPU index (which
+    // is what the user sees and types), NOT by position in the snapshot list.
+    private int _selectedGpuIndex;
+
+    /// <summary>The nvidia-smi index of the GPU currently shown in the Overview detail.</summary>
+    public int SelectedGpuIndex => _selectedGpuIndex;
+
+    // Click hit-test spans for the summary-strip tiles: display column range [Start, End) on tile
+    // Row -> GPU index. Rebuilt every time the strip is composed, because tile widths depend on the
+    // live values ("100%" is wider than "0%") and the row breaks depend on the current width.
+    private readonly List<(int Start, int End, int GpuIndex, int Row)> _tileSpans = new();
+
+    // Width the strip was last laid out for, so live updates re-wrap identically to the build.
+    private int _stripWidth = 80;
+
+    // Columns a card consumes around its content, subtracted when computing the strip's usable
+    // width: 2 border + 2 padding (BuildCard uses Padding(1,0,1,0)) + 2 for the panel's scrollbar
+    // gutter and a column of slack, so a tile never sits flush against the border.
+    private const int CardChromeWidth = 6;
+
     public OverviewTab(ConsoleWindowSystem windowSystem, IGpuStatsProvider stats, Configuration.CxnvmonConfig config)
         : base(windowSystem, stats)
     {
         _sparklineHeight = config.SparklineHeight;
         _refreshSeconds = config.RefreshIntervalMs / 1000.0;
         _showTimeAxis = config.ShowTimeAxis;
+    }
+
+    // Resolves the GPU whose detail should be shown. Falls back to the first GPU when the selected
+    // index isn't present (e.g. a GPU disappeared, or the app was started with a stale selection),
+    // so the Overview never renders empty just because selection drifted.
+    private GpuSample? SelectedGpu(GpuSnapshot snapshot)
+    {
+        if (snapshot.Gpus.Count == 0) return null;
+        return snapshot.Gpus.FirstOrDefault(g => g.Index == _selectedGpuIndex) ?? snapshot.Gpus[0];
+    }
+
+    /// <summary>
+    /// Moves the selection by <paramref name="delta"/> positions through the available GPUs
+    /// (wrapping). Bound to <c>[</c> / <c>]</c>. Returns true when the selection actually changed.
+    /// </summary>
+    public bool CycleGpu(int delta)
+    {
+        var gpus = Stats.ReadSnapshot().Gpus;
+        if (gpus.Count <= 1) return false;
+
+        // Work in list positions (contiguous) and translate back to the GPU's real index, so
+        // wrapping is correct even with non-contiguous indices.
+        int pos = gpus.ToList().FindIndex(g => g.Index == _selectedGpuIndex);
+        if (pos < 0) pos = 0;
+        int next = ((pos + delta) % gpus.Count + gpus.Count) % gpus.Count;
+        return SelectGpu(gpus[next].Index);
+    }
+
+    /// <summary>
+    /// Selects a GPU by its nvidia-smi index. Bound to keys <c>1</c>–<c>9</c> (as index 0–8) and to
+    /// clicks on the summary strip. Ignores indices that aren't present. Returns true when the
+    /// selection changed.
+    /// </summary>
+    public bool SelectGpu(int gpuIndex)
+    {
+        if (gpuIndex == _selectedGpuIndex) return false;
+
+        var gpus = Stats.ReadSnapshot().Gpus;
+        if (gpus.All(g => g.Index != gpuIndex)) return false;
+
+        _selectedGpuIndex = gpuIndex;
+        // Repaint immediately with the new selection rather than waiting for the next refresh tick,
+        // so switching feels instant.
+        UpdatePanel(Stats.ReadSnapshot());
+        return true;
     }
 
     // X-axis provider for the history sparklines: turns the graph geometry into time-delta ticks
@@ -97,6 +165,207 @@ internal class OverviewTab : BaseResponsiveTab
         return $"{icon} [{color} bold]{value}[/]";
     }
 
+    private const string IconMedia = "🎬";
+
+    // NVENC/NVDEC readouts, appended to the hero vitals line. Always shown (muted at 0%) rather
+    // than appearing/disappearing: a line whose fields come and go makes the whole hero jump.
+    private static string MediaEngines(GpuSample gpu)
+    {
+        var muted = UIConstants.MutedText.ToMarkup();
+        string Engine(string label, double pct)
+        {
+            var color = pct > 0 ? UIConstants.ThresholdColor(pct).ToMarkup() : muted;
+            return $"[{muted}]{label}[/] [{color} bold]{pct:F0}%[/]";
+        }
+
+        return $"{IconMedia} {Engine("enc", gpu.EncoderPercent)} {Engine("dec", gpu.DecoderPercent)}";
+    }
+
+    // Throttle chip for the hero card — surfaced ONLY for real throttles (the provider already
+    // filters out the benign gpu_idle / applications-clocks bits, which are "Active" on any idle
+    // card). Empty string when the GPU is running unthrottled, so the chip is simply absent.
+    // Severity: a hardware slowdown or thermal cap is Critical (you are losing clocks to heat or a
+    // protection trip); a software power cap is Warning (expected behaviour at the power limit).
+    private static string ThrottleChip(GpuSample gpu)
+    {
+        var reasons = new List<string>();
+        if (gpu.ThrottleThermal) reasons.Add("thermal");
+        if (gpu.ThrottleHwSlowdown) reasons.Add("hw slowdown");
+        if (gpu.ThrottlePower) reasons.Add("power cap");
+        if (reasons.Count == 0) return "";
+
+        var color = (gpu.ThrottleThermal || gpu.ThrottleHwSlowdown
+            ? UIConstants.Critical
+            : UIConstants.Warning).ToMarkup();
+
+        return $"[{color} bold]⚠ {string.Join(" · ", reasons)}[/]";
+    }
+
+    // The hero card's two lines: identity (+ throttle chip when throttling) and the vitals line
+    // (+ media-engine readouts). Shared by build and live-update so the two can't drift.
+    private static List<string> HeroLines(GpuSample gpu, string gpuName)
+    {
+        var titleLine = $"[{UIConstants.Accent.ToMarkup()} bold]{gpuName}[/]";
+        var chip = ThrottleChip(gpu);
+        if (chip.Length > 0)
+            titleLine += $"   {chip}";
+
+        var muted = UIConstants.MutedText.ToMarkup();
+        return new List<string>
+        {
+            titleLine,
+            HeroVitals(gpu) + $"[{muted}]   [/]" + MediaEngines(gpu)
+        };
+    }
+
+    // === Multi-GPU summary strip (Architecture C) ==========================================
+    // A compact per-GPU tile row that IS the selector: the highlighted tile's GPU is the one shown
+    // in the full Overview below. Rendered only when there is more than one GPU — with a single GPU
+    // the strip would be pure noise, and its absence is what keeps the single-GPU layout unchanged.
+
+    private const string StripMarkupName = "gpu_strip_markup";
+    private const string StripCardName = "gpu_strip_card";
+
+    // The "GPU N Metrics" section header above the detail cards. Named so it can be refreshed when
+    // the selection changes — otherwise it would keep naming the GPU that was selected at build time.
+    private const string MetricsHeaderName = "sel_metrics_header";
+
+    // The left-column spec-sheet markup. Named because OverviewTab builds its own GridControl
+    // layout, so the base class's HorizontalGridControl-based UpdateLeftColumnText can't reach it;
+    // we find it by name instead (see the override below). Without this the sheet would keep
+    // describing whichever GPU was selected when the panel was built.
+    private const string SpecSheetMarkupName = "spec_sheet_markup";
+
+    // OverviewTab lays out with a GridControl (not the base class's HorizontalGridControl), so the
+    // base column-walking update finds nothing. Locate the spec-sheet markup by name and refresh it.
+    protected override void UpdateLeftColumnText(IWindowControl grid, GpuSnapshot snapshot)
+    {
+        if (FindControlRecursive<MarkupControl>(grid, SpecSheetMarkupName, out var markup) && markup != null)
+            markup.SetContent(BuildTextContent(snapshot));
+    }
+
+    // Gap between tiles, in display columns.
+    private const string TileGap = "  ";
+
+    // Builds the tile rows and (re)records the click hit-test spans. The selected tile is marked
+    // with a leading "▌" bar and bright/bold text; unselected tiles are muted, so the selection
+    // reads at a glance without relying on a background fill (which the tinted panel bg would
+    // fight with).
+    //
+    // Tiles WRAP onto additional rows when they don't fit the available width: on a narrow terminal
+    // (or with many GPUs) a single row would clip the last tiles, and a fleet view that hides part
+    // of the fleet is worse than useless. Spans are recorded per row so click hit-testing stays
+    // correct on wrapped rows.
+    private List<string> BuildStripLines(GpuSnapshot snapshot, int availableWidth)
+    {
+        _tileSpans.Clear();
+
+        var muted = UIConstants.MutedText.ToMarkup();
+        var accent = UIConstants.Accent.ToMarkup();
+        var selectedIndex = SelectedGpu(snapshot)?.Index ?? -1;
+
+        var rows = new List<string>();
+        var sb = new System.Text.StringBuilder();
+        int column = 0;
+        int row = 0;
+
+        foreach (var gpu in snapshot.Gpus)
+        {
+            bool selected = gpu.Index == selectedIndex;
+
+            // Compose the tile's plain text first so its true display width is measurable for the
+            // click hit-test (markup tags must not count toward columns).
+            string label = $"GPU {gpu.Index}";
+            string values =
+                $"{IconUtil} {gpu.UtilizationPercent:F0}% " +
+                $"{IconMem} {gpu.MemoryUsedPercent:F0}% " +
+                $"{IconTemp} {gpu.TemperatureC:F0}°C";
+            string marker = selected ? "▌" : " ";
+            int width = SharpConsoleUI.Parsing.MarkupParser.StripLength($"{marker}{label}  {values}");
+
+            // Wrap when this tile (plus its leading gap) would overflow. Never wrap the first tile
+            // of a row — an over-wide tile has to clip rather than loop forever.
+            if (column > 0 && column + TileGap.Length + width > availableWidth)
+            {
+                rows.Add(sb.ToString());
+                sb.Clear();
+                column = 0;
+                row++;
+            }
+
+            if (column > 0)
+            {
+                sb.Append($"[{muted}]{TileGap}[/]");
+                column += TileGap.Length;
+            }
+
+            var labelColor = selected ? accent : muted;
+            sb.Append(
+                (selected ? $"[{accent} bold]▌[/]" : " ") +
+                $"[{labelColor}{(selected ? " bold" : "")}]{label}[/]  " +
+                Metric(IconUtil, $"{gpu.UtilizationPercent:F0}%", gpu.UtilizationPercent) + " " +
+                Metric(IconMem, $"{gpu.MemoryUsedPercent:F0}%", gpu.MemoryUsedPercent) + " " +
+                Metric(IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC));
+
+            _tileSpans.Add((column, column + width, gpu.Index, row));
+            column += width;
+        }
+
+        if (sb.Length > 0 || rows.Count == 0)
+            rows.Add(sb.ToString());
+
+        return rows;
+    }
+
+    // The strip's second line: the key hints, so the selector documents itself.
+    private static string StripHintLine()
+    {
+        var muted = UIConstants.MutedText.ToMarkup();
+        var accent = UIConstants.Accent.ToMarkup();
+        return $"[{muted}]select GPU:[/] [{accent}][[[/] [{accent}]]][/] [{muted}]prev/next  ·[/] " +
+               $"[{accent}]1[/][{muted}]-[/][{accent}]9[/] [{muted}]direct  ·  click a tile[/]";
+    }
+
+    // The full strip content: the (possibly wrapped) tile rows followed by the hint line.
+    private List<string> StripContent(GpuSnapshot snapshot)
+    {
+        var lines = BuildStripLines(snapshot, _stripWidth);
+        lines.Add(StripHintLine());
+        return lines;
+    }
+
+    // Adds the summary strip as the first element of the graphs panel. Clicking a tile selects that
+    // GPU (hit-tested against the recorded tile spans).
+    private void BuildSummaryStrip(ScrollablePanelControl panel, GpuSnapshot snapshot)
+    {
+        if (snapshot.Gpus.Count <= 1) return;
+
+        var card = BuildCard();
+        card.Name = StripCardName;
+
+        var markup = new MarkupBuilder().WithName(StripMarkupName);
+        foreach (var line in StripContent(snapshot))
+            markup.AddLine(line);
+        var stripMarkup = markup.Build();
+
+        stripMarkup.MouseClick += (sender, e) =>
+        {
+            // Hit-test both the row and the column: tiles may wrap onto several rows, and the hint
+            // line (the row after the last tile row) is decoration, so it matches nothing.
+            foreach (var (start, end, gpuIndex, row) in _tileSpans)
+            {
+                if (e.Position.Y != row) continue;
+                if (e.Position.X < start || e.Position.X >= end) continue;
+                if (SelectGpu(gpuIndex)) e.Handled = true;
+                return;
+            }
+        };
+
+        card.AddControl(stripMarkup);
+        panel.AddControl(card);
+        AddSectionSeparator(panel);
+    }
+
     // Padding added to the measured spec-sheet width for the left column (breathing room before
     // the separator).
     private const int LeftColumnPadding = 2;
@@ -144,12 +413,18 @@ internal class OverviewTab : BaseResponsiveTab
         // Top margin: start the content one row down from the panel's top edge.
         lines.Add("");
 
-        foreach (var gpu in snapshot.Gpus)
+        // Spec-sheet describes the SELECTED GPU only (Architecture C) — with one GPU that's the
+        // only GPU, so this is identical to the previous single-GPU rendering.
+        var gpu = SelectedGpu(snapshot);
+        if (gpu != null)
         {
             var d = deviceInfos.FirstOrDefault(di => di.Index == gpu.Index);
 
-            // Device title.
-            lines.Add($"[{accent} bold]{d?.Name ?? $"GPU {gpu.Index}"}[/]");
+            // Device title. With multiple GPUs, prefix the index so it's unambiguous which card
+            // the sheet describes.
+            var title = d?.Name ?? $"GPU {gpu.Index}";
+            if (snapshot.Gpus.Count > 1) title = $"GPU {gpu.Index} · {title}";
+            lines.Add($"[{accent} bold]{title}[/]");
 
             if (d != null)
             {
@@ -177,9 +452,10 @@ internal class OverviewTab : BaseResponsiveTab
                 lines.Add($"[{text}]{d.VBiosVersion}[/]");
             }
         }
-
-        if (snapshot.Gpus.Count == 0)
+        else
+        {
             lines.Add("[red]No GPUs detected.[/]");
+        }
 
         return lines;
     }
@@ -190,32 +466,38 @@ internal class OverviewTab : BaseResponsiveTab
 
         var deviceInfos = Stats.ReadDeviceInfo();
 
-        foreach (var gpu in snapshot.Gpus)
+        // Multi-GPU only: the fleet-at-a-glance strip, which is also the selector.
+        BuildSummaryStrip(panel, snapshot);
+
+        // Detail for the SELECTED GPU. Control names are deliberately GPU-INDEPENDENT ("sel_*"):
+        // only one GPU's detail exists at a time, so switching GPU updates these controls in place
+        // instead of rebuilding the panel. (Histories stay keyed by real GPU index, so each GPU
+        // keeps its own trend across switches.)
         {
+            var gpu = SelectedGpu(snapshot)!;
             var deviceInfo = deviceInfos.FirstOrDefault(d => d.Index == gpu.Index);
             var gpuName = deviceInfo?.Name ?? $"GPU {gpu.Index}";
 
-            AddSectionHeader(panel, $"GPU {gpu.Index} Metrics");
+            AddSectionHeader(panel, $"GPU {gpu.Index} Metrics", MetricsHeaderName);
 
             // Hero strip — untitled card (the GPU name is the first body line, so a card title
             // would just repeat it).
             var heroCard = BuildCard();
-            heroCard.Name = $"gpu{gpu.Index}_hero_card";
+            heroCard.Name = "sel_hero_card";
 
-            heroCard.AddControl(new MarkupBuilder()
-                .WithName($"gpu{gpu.Index}_hero_markup")
-                .AddLine($"[{UIConstants.Accent.ToMarkup()} bold]{gpuName}[/]")
-                .AddLine(HeroVitals(gpu))
-                .Build());
+            var heroMarkup = new MarkupBuilder().WithName("sel_hero_markup");
+            foreach (var line in HeroLines(gpu, gpuName))
+                heroMarkup.AddLine(line);
+            heroCard.AddControl(heroMarkup.Build());
             panel.AddControl(heroCard);
 
             AddSectionSeparator(panel);
 
             // Utilization
             var utilCard = BuildCard($"Utilization — {gpu.UtilizationPercent:F0}%");
-            utilCard.Name = $"gpu{gpu.Index}_util_card";
+            utilCard.Name = "sel_util_card";
             utilCard.AddControl(new BarGraphBuilder()
-                .WithName($"gpu{gpu.Index}_util_bar")
+                .WithName("sel_util_bar")
                 .WithValue(gpu.UtilizationPercent)
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
@@ -226,7 +508,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .Build());
             utilCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             utilCard.AddControl(new SparklineBuilder()
-                .WithName($"gpu{gpu.Index}_util_spark")
+                .WithName("sel_util_spark")
                 .WithHeight(_sparklineHeight)
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
@@ -243,9 +525,9 @@ internal class OverviewTab : BaseResponsiveTab
 
             // Memory
             var memCard = BuildCard($"Memory — {gpu.MemoryUsedPercent:F0}%");
-            memCard.Name = $"gpu{gpu.Index}_mem_card";
+            memCard.Name = "sel_mem_card";
             memCard.AddControl(new BarGraphBuilder()
-                .WithName($"gpu{gpu.Index}_mem_bar")
+                .WithName("sel_mem_bar")
                 .WithValue(gpu.MemoryUsedPercent)
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
@@ -256,7 +538,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .Build());
             memCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             memCard.AddControl(new SparklineBuilder()
-                .WithName($"gpu{gpu.Index}_mem_spark")
+                .WithName("sel_mem_spark")
                 .WithHeight(_sparklineHeight)
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
@@ -273,9 +555,9 @@ internal class OverviewTab : BaseResponsiveTab
 
             // Temperature
             var tempCard = BuildCard($"Temperature — {gpu.TemperatureC:F0}°C");
-            tempCard.Name = $"gpu{gpu.Index}_temp_card";
+            tempCard.Name = "sel_temp_card";
             tempCard.AddControl(new BarGraphBuilder()
-                .WithName($"gpu{gpu.Index}_temp_bar")
+                .WithName("sel_temp_bar")
                 .WithValue(gpu.TemperatureC)
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
@@ -286,7 +568,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .Build());
             tempCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             tempCard.AddControl(new SparklineBuilder()
-                .WithName($"gpu{gpu.Index}_temp_spark")
+                .WithName("sel_temp_spark")
                 .WithHeight(_sparklineHeight)
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
@@ -303,9 +585,9 @@ internal class OverviewTab : BaseResponsiveTab
 
             // Power
             var powerCard = BuildCard($"Power — {gpu.PowerDrawWatts:F0}W");
-            powerCard.Name = $"gpu{gpu.Index}_power_card";
+            powerCard.Name = "sel_power_card";
             powerCard.AddControl(new BarGraphBuilder()
-                .WithName($"gpu{gpu.Index}_power_bar")
+                .WithName("sel_power_bar")
                 .WithValue(gpu.PowerDrawWatts)
                 .WithMaxValue(gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : 100)
                 .WithAlignment(HorizontalAlignment.Stretch)
@@ -316,7 +598,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .Build());
             powerCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             powerCard.AddControl(new SparklineBuilder()
-                .WithName($"gpu{gpu.Index}_power_spark")
+                .WithName("sel_power_spark")
                 .WithHeight(_sparklineHeight)
                 .WithMaxValue(gpu.PowerLimitWatts > 0 ? gpu.PowerLimitWatts : 100)
                 .WithMode(SparklineMode.Braille)
@@ -333,9 +615,9 @@ internal class OverviewTab : BaseResponsiveTab
 
             // Fan Speed
             var fanCard = BuildCard($"Fan — {gpu.FanSpeedPercent:F0}%");
-            fanCard.Name = $"gpu{gpu.Index}_fan_card";
+            fanCard.Name = "sel_fan_card";
             fanCard.AddControl(new BarGraphBuilder()
-                .WithName($"gpu{gpu.Index}_fan_bar")
+                .WithName("sel_fan_bar")
                 .WithValue(gpu.FanSpeedPercent)
                 .WithMaxValue(100)
                 .WithAlignment(HorizontalAlignment.Stretch)
@@ -346,7 +628,7 @@ internal class OverviewTab : BaseResponsiveTab
                 .Build());
             fanCard.AddControl(Controls.RuleBuilder().WithColor(UIConstants.SeparatorColor).Build());
             fanCard.AddControl(new SparklineBuilder()
-                .WithName($"gpu{gpu.Index}_fan_spark")
+                .WithName("sel_fan_spark")
                 .WithHeight(_sparklineHeight)
                 .WithMaxValue(100)
                 .WithMode(SparklineMode.Braille)
@@ -381,58 +663,69 @@ internal class OverviewTab : BaseResponsiveTab
 
         var deviceInfos = Stats.ReadDeviceInfo();
 
-        foreach (var gpu in snapshot.Gpus)
+        // The summary strip reflects ALL GPUs (it's the fleet view) and highlights the selected one.
+        if (snapshot.Gpus.Count > 1 &&
+            FindControlRecursive<MarkupControl>(panel, StripMarkupName, out var stripMarkup) && stripMarkup != null)
         {
+            stripMarkup.SetContent(StripContent(snapshot));
+        }
+
+        // Everything below the strip is the SELECTED GPU's detail.
+        var selected = SelectedGpu(snapshot);
+        if (selected != null)
+        {
+            var gpu = selected;
             var deviceInfo = deviceInfos.FirstOrDefault(d => d.Index == gpu.Index);
             var gpuName = deviceInfo?.Name ?? $"GPU {gpu.Index}";
 
+            // The section header names the selected GPU, so it must follow the selection.
+            if (FindControlRecursive<MarkupControl>(panel, MetricsHeaderName, out var headerMarkup) && headerMarkup != null)
+                headerMarkup.SetContent(new List<string> { SectionHeaderMarkup($"GPU {gpu.Index} Metrics") });
+
             // Update Hero (untitled card; content in the inner markup only)
-            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_hero_card", out var hCard) && hCard != null)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, "sel_hero_card", out var hCard) && hCard != null)
             {
-                if (FindControlRecursive<MarkupControl>(hCard, $"gpu{gpu.Index}_hero_markup", out var hMarkup) && hMarkup != null)
+                if (FindControlRecursive<MarkupControl>(hCard, "sel_hero_markup", out var hMarkup) && hMarkup != null)
                 {
-                    hMarkup.SetContent(new List<string> {
-                        $"[{UIConstants.Accent.ToMarkup()} bold]{gpuName}[/]",
-                        HeroVitals(gpu)
-                    });
+                    hMarkup.SetContent(HeroLines(gpu, gpuName));
                 }
             }
 
             // Update Cards (Header) and BarGraphs (Value + Color)
-            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_util_card", out var uCard) && uCard != null)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, "sel_util_card", out var uCard) && uCard != null)
             {
                 uCard.Header = CardHeaderMarkup($"Utilization — {gpu.UtilizationPercent:F0}%");
-                if (FindControlRecursive<BarGraphControl>(uCard, $"gpu{gpu.Index}_util_bar", out var uBar) && uBar != null)
+                if (FindControlRecursive<BarGraphControl>(uCard, "sel_util_bar", out var uBar) && uBar != null)
                 {
                     uBar.Value = gpu.UtilizationPercent;
                     uBar.FilledColor = UIConstants.ThresholdColor(gpu.UtilizationPercent);
                 }
             }
 
-            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_mem_card", out var mCard) && mCard != null)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, "sel_mem_card", out var mCard) && mCard != null)
             {
                 mCard.Header = CardHeaderMarkup($"Memory — {gpu.MemoryUsedPercent:F0}%");
-                if (FindControlRecursive<BarGraphControl>(mCard, $"gpu{gpu.Index}_mem_bar", out var mBar) && mBar != null)
+                if (FindControlRecursive<BarGraphControl>(mCard, "sel_mem_bar", out var mBar) && mBar != null)
                 {
                     mBar.Value = gpu.MemoryUsedPercent;
                     mBar.FilledColor = UIConstants.ThresholdColor(gpu.MemoryUsedPercent);
                 }
             }
 
-            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_temp_card", out var tCard) && tCard != null)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, "sel_temp_card", out var tCard) && tCard != null)
             {
                 tCard.Header = CardHeaderMarkup($"Temperature — {gpu.TemperatureC:F0}°C");
-                if (FindControlRecursive<BarGraphControl>(tCard, $"gpu{gpu.Index}_temp_bar", out var tBar) && tBar != null)
+                if (FindControlRecursive<BarGraphControl>(tCard, "sel_temp_bar", out var tBar) && tBar != null)
                 {
                     tBar.Value = gpu.TemperatureC;
                     tBar.FilledColor = UIConstants.ThresholdColor(gpu.TemperatureC);
                 }
             }
 
-            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_power_card", out var pCard) && pCard != null)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, "sel_power_card", out var pCard) && pCard != null)
             {
                 pCard.Header = CardHeaderMarkup($"Power — {gpu.PowerDrawWatts:F0}W");
-                if (FindControlRecursive<BarGraphControl>(pCard, $"gpu{gpu.Index}_power_bar", out var pBar) && pBar != null)
+                if (FindControlRecursive<BarGraphControl>(pCard, "sel_power_bar", out var pBar) && pBar != null)
                 {
                     pBar.Value = gpu.PowerDrawWatts;
                     double powerPercent = gpu.PowerLimitWatts > 0 ? (gpu.PowerDrawWatts / gpu.PowerLimitWatts) * 100.0 : 0.0;
@@ -440,10 +733,10 @@ internal class OverviewTab : BaseResponsiveTab
                 }
             }
 
-            if (FindControlRecursive<ScrollablePanelControl>(panel, $"gpu{gpu.Index}_fan_card", out var fCard) && fCard != null)
+            if (FindControlRecursive<ScrollablePanelControl>(panel, "sel_fan_card", out var fCard) && fCard != null)
             {
                 fCard.Header = CardHeaderMarkup($"Fan — {gpu.FanSpeedPercent:F0}%");
-                if (FindControlRecursive<BarGraphControl>(fCard, $"gpu{gpu.Index}_fan_bar", out var fBar) && fBar != null)
+                if (FindControlRecursive<BarGraphControl>(fCard, "sel_fan_bar", out var fBar) && fBar != null)
                 {
                     fBar.Value = gpu.FanSpeedPercent;
                     fBar.FilledColor = UIConstants.ThresholdColor(gpu.FanSpeedPercent);
@@ -451,19 +744,19 @@ internal class OverviewTab : BaseResponsiveTab
             }
 
             // Update Sparklines (they are children of the cards)
-            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_util_spark", out var uSpark) && uSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, "sel_util_spark", out var uSpark) && uSpark != null)
                 uSpark.SetDataPoints(_histories.Get($"{gpu.Index}_util"));
 
-            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_mem_spark", out var mSpark) && mSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, "sel_mem_spark", out var mSpark) && mSpark != null)
                 mSpark.SetDataPoints(_histories.Get($"{gpu.Index}_mem"));
 
-            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_temp_spark", out var tSpark) && tSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, "sel_temp_spark", out var tSpark) && tSpark != null)
                 tSpark.SetDataPoints(_histories.Get($"{gpu.Index}_temp"));
 
-            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_power_spark", out var pSpark) && pSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, "sel_power_spark", out var pSpark) && pSpark != null)
                 pSpark.SetDataPoints(_histories.Get($"{gpu.Index}_power"));
 
-            if (FindControlRecursive<SparklineControl>(panel, $"gpu{gpu.Index}_fan_spark", out var fSpark) && fSpark != null)
+            if (FindControlRecursive<SparklineControl>(panel, "sel_fan_spark", out var fSpark) && fSpark != null)
                 fSpark.SetDataPoints(_histories.Get($"{gpu.Index}_fan"));
         }
     }
@@ -498,10 +791,14 @@ internal class OverviewTab : BaseResponsiveTab
             grid.ColumnDefinitions.Add(GridLength.Star(1.0));
             grid.RowDefinitions.Add(GridLength.Star(1.0));
 
+            // Width available to the strip's tiles: the right column, less the card border+padding
+            // and the panel's scrollbar gutter. Drives where the tile rows wrap.
+            _stripWidth = Math.Max(20, windowWidth - leftWidth - UIConstants.SeparatorColumnWidth - CardChromeWidth);
+
             var leftPanel = BuildScrollablePanel();
             leftPanel.BackgroundColor = UIConstants.LeftPanelBg;
             leftPanel.Padding = new Padding(1, 0, 0, 0);   // 1-col left gutter INSIDE the tinted bg
-            AddMarkupLines(leftPanel, leftLines);
+            AddNamedMarkupLines(leftPanel, leftLines, SpecSheetMarkupName);
 
             var separator = new SeparatorControl { ForegroundColor = UIConstants.SeparatorColor, VerticalAlignment = VerticalAlignment.Fill };
 
@@ -518,9 +815,11 @@ internal class OverviewTab : BaseResponsiveTab
             grid.ColumnDefinitions.Add(GridLength.Star(1.0));
             grid.RowDefinitions.Add(GridLength.Star(1.0));
 
+            _stripWidth = Math.Max(20, windowWidth - CardChromeWidth);
+
             var mainPanel = BuildScrollablePanel();
             mainPanel.Name = GraphPanelName;
-            AddMarkupLines(mainPanel, BuildTextContent(initialSnapshot));
+            AddNamedMarkupLines(mainPanel, BuildTextContent(initialSnapshot), SpecSheetMarkupName);
             AddNarrowSeparator(mainPanel);
             BuildGraphsContent(mainPanel, initialSnapshot);
 

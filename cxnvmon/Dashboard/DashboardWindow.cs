@@ -65,6 +65,11 @@ internal sealed class DashboardWindow
                     return;
                 }
                 if (HandleTabShortcut(e.KeyInfo.Key))
+                {
+                    e.Handled = true;
+                    return;
+                }
+                if (HandleGpuSelectionShortcut(e.KeyInfo))
                     e.Handled = true;
             })
             .Build();
@@ -195,6 +200,29 @@ internal sealed class DashboardWindow
         _ => false
     };
 
+    // GPU selection keys (multi-GPU Architecture C): '[' / ']' step through the GPUs and '1'–'9'
+    // jump straight to a GPU index (key '1' = GPU 0, matching how the tiles are labelled starting
+    // at 0 — the digit is the ORDINAL, not the index, so '1' is the first GPU).
+    // Matched on KeyChar, not ConsoleKey: bracket/digit keys vary by keyboard layout, and KeyChar
+    // is what the user actually typed. On a single-GPU box these are all no-ops (CycleGpu/SelectGpu
+    // return false), so the keys stay unhandled and don't swallow anything.
+    private bool HandleGpuSelectionShortcut(ConsoleKeyInfo keyInfo)
+    {
+        var overview = _tabs.OfType<OverviewTab>().FirstOrDefault();
+        if (overview == null) return false;
+
+        switch (keyInfo.KeyChar)
+        {
+            case '[': return overview.CycleGpu(-1);
+            case ']': return overview.CycleGpu(1);
+        }
+
+        if (keyInfo.KeyChar >= '1' && keyInfo.KeyChar <= '9')
+            return overview.SelectGpu(keyInfo.KeyChar - '1');
+
+        return false;
+    }
+
     // Selects the tab of the given type if it is present (i.e. enabled in config). Returns whether
     // the selection was applied — false when that tab is hidden, so the caller can treat the key
     // as unhandled.
@@ -229,7 +257,7 @@ internal sealed class DashboardWindow
             .AddLeftSeparator()
             .AddLeft("F9", "Settings", OpenSettings)
             .AddLeft("F10", "Exit", () => _windowSystem.Shutdown())
-            .AddRightText(FormatStatsLegend(_stats.ReadSnapshot()))
+            .AddRightText(FormatStatsLegend(_stats.ReadSnapshot(), SelectedGpuIndex))
             .WithBackgroundColor(UIConstants.HeaderBg)
             .WithForegroundColor(UIConstants.MutedText)
             .WithShortcutForegroundColor(UIConstants.Accent)
@@ -317,22 +345,27 @@ internal sealed class DashboardWindow
         // The stats legend is the single right-side item; update its label in place.
         var legend = _statusBar.RightItems.LastOrDefault();
         if (legend != null)
-            legend.Label = FormatStatsLegend(snapshot);
+            legend.Label = FormatStatsLegend(snapshot, SelectedGpuIndex);
     }
+
+    // The GPU the Overview is showing, so the status-bar legend reports the same card the user is
+    // looking at rather than always GPU 0. Falls back to 0 when the Overview tab is disabled.
+    private int SelectedGpuIndex =>
+        _tabs.OfType<OverviewTab>().FirstOrDefault()?.SelectedGpuIndex ?? 0;
 
     // Right-aligned live GPU/MEM readout for the bottom status bar. StatusBarItem labels DO parse
     // markup, so colors follow the usage thresholds. Note: interpolate Color via .ToMarkup()
     // (emits valid rgb(...)); a bare Color stringifies to "Color(r,g,b)", which is not valid markup.
-    private static string FormatStatsLegend(GpuSnapshot snapshot)
+    private static string FormatStatsLegend(GpuSnapshot snapshot, int selectedGpuIndex)
     {
         if (snapshot.Gpus.Count == 0)
             return "No GPU";
 
-        var gpu = snapshot.Gpus[0];
+        var gpu = snapshot.Gpus.FirstOrDefault(g => g.Index == selectedGpuIndex) ?? snapshot.Gpus[0];
         var utilColor = UIConstants.ThresholdColor(gpu.UtilizationPercent).ToMarkup();
         var memColor = UIConstants.ThresholdColor(gpu.MemoryUsedPercent).ToMarkup();
         var muted = UIConstants.MutedText.ToMarkup();
-        return $"[{muted}]GPU 0[/] [{utilColor}]{gpu.UtilizationPercent:F0}%[/] [{muted}]•[/] [{muted}]MEM[/] [{memColor}]{gpu.MemoryUsedPercent:F0}%[/]";
+        return $"[{muted}]GPU {gpu.Index}[/] [{utilColor}]{gpu.UtilizationPercent:F0}%[/] [{muted}]•[/] [{muted}]MEM[/] [{memColor}]{gpu.MemoryUsedPercent:F0}%[/]";
     }
 
     #endregion

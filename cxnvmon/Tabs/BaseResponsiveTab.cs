@@ -310,6 +310,16 @@ internal abstract class BaseResponsiveTab : ITab
         panel.AddControl(markup.Build());
     }
 
+    // As AddMarkupLines, but names the markup control so it can be found and refreshed later
+    // (needed wherever the text content is live rather than static).
+    internal static void AddNamedMarkupLines(ScrollablePanelControl panel, List<string> lines, string name)
+    {
+        var markup = Controls.Markup().WithName(name);
+        foreach (var line in lines)
+            markup.AddLine(line);
+        panel.AddControl(markup.Build());
+    }
+
     internal static void AddNarrowSeparator(ScrollablePanelControl panel)
     {
         panel.AddControl(
@@ -328,16 +338,23 @@ internal abstract class BaseResponsiveTab : ITab
         );
     }
 
-    protected static void AddSectionHeader(ScrollablePanelControl panel, string title)
+    protected static void AddSectionHeader(ScrollablePanelControl panel, string title, string? name = null)
     {
-        panel.AddControl(
-            Controls.Markup()
-                .AddLine($"[{UIConstants.MutedText.ToMarkup()} bold]{title}[/]")
-                .WithAlignment(HorizontalAlignment.Left)
-                .WithMargin(2, 0, 2, 1)
-                .Build()
-        );
+        var builder = Controls.Markup()
+            .AddLine(SectionHeaderMarkup(title))
+            .WithAlignment(HorizontalAlignment.Left)
+            .WithMargin(2, 0, 2, 1);
+
+        if (name != null)
+            builder = builder.WithName(name);
+
+        panel.AddControl(builder.Build());
     }
+
+    // Section-header styling. Live updates (markup.SetContent) MUST route through here, or the
+    // refreshed header loses the muted/bold treatment.
+    internal static string SectionHeaderMarkup(string title) =>
+        $"[{UIConstants.MutedText.ToMarkup()} bold]{title}[/]";
 
     protected static void AddFluentSectionLabel(ScrollablePanelControl panel, string title)
     {

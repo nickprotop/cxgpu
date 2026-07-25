@@ -16,6 +16,13 @@ internal static class GpuStatsFactory
     /// </exception>
     public static IGpuStatsProvider Create()
     {
+        // Dev/QA escape hatch: CXNVMON_FAKE_GPUS=<n> substitutes a synthetic multi-GPU provider so
+        // the multi-GPU UI (summary strip, selector, throttle chip) can be exercised on machines
+        // with a single GPU. Unset in normal use.
+        var fakeCount = FakeMultiGpuStatsProvider.ConfiguredCount();
+        if (fakeCount.HasValue)
+            return new FakeMultiGpuStatsProvider(fakeCount.Value);
+
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
             return new NvidiaSmiGpuStatsProvider();
