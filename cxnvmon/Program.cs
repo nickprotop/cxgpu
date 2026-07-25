@@ -68,7 +68,7 @@ internal class Program
         }
 
         Console.WriteLine($"""
-            cxnvmon {AppVersion} - NVIDIA GPU monitor (TUI)
+            cxnvmon {AppVersion} - GPU monitor for the terminal (NVIDIA + AMD)
 
             Usage:
               cxnvmon [options]
