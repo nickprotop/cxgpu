@@ -1,5 +1,6 @@
 using cxgpu.Configuration;
 using cxgpu.Dashboard;
+using cxgpu.Export;
 using cxgpu.Gpu;
 using SharpConsoleUI;
 using SharpConsoleUI.Configuration;
@@ -18,10 +19,26 @@ internal class Program
             return 0;
         }
 
+        ExportOptions export;
+        try
+        {
+            export = ExportOptions.Parse(args);
+        }
+        catch (ArgumentException ex)
+        {
+            // Argument errors are reported before anything starts, and plainly — a monitoring endpoint
+            // that failed to come up must never look like it succeeded.
+            Console.Error.WriteLine($"cxgpu: {ex.Message}");
+            return 2;
+        }
+
         try
         {
             var config = CxgpuConfig.Load();
             var stats = GpuStatsFactory.Create(args, config);
+
+            if (export.NoUi)
+                return await RunHeadlessAsync(stats, export);
 
             var windowSystem = new ConsoleWindowSystem(
                 new NetConsoleDriver(RenderMode.Buffer),
@@ -39,6 +56,11 @@ internal class Program
                 e.Cancel = true;
                 windowSystem.Shutdown(0);
             };
+
+            // Serving alongside the UI: the exporter reads the same provider, so a scrape and the
+            // screen can never disagree. Started BEFORE the UI so a port collision fails immediately
+            // rather than after the terminal has been taken over.
+            using var exporter = StartExporter(stats, export);
 
             var dashboard = new DashboardWindow(windowSystem, stats, config);
             dashboard.Create();
@@ -60,6 +82,58 @@ internal class Program
             ExceptionFormatter.WriteException(ex);
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Starts the exporter, or returns null when it was not requested. Failures are fatal by design —
+    /// a scraper pointed at a port with nothing behind it is worse than a startup error.
+    /// </summary>
+    private static PrometheusExporter? StartExporter(IGpuStatsProvider stats, ExportOptions export)
+    {
+        if (!export.Prometheus) return null;
+
+        var exporter = new PrometheusExporter(stats, export.Port, export.Host);
+        exporter.Start();
+        return exporter;
+    }
+
+    /// <summary>
+    /// The headless path: an exporter and nothing else.
+    ///
+    /// No ConsoleWindowSystem, no alternate screen, no input handling — this is meant to run under
+    /// systemd or backgrounded with &amp;, so it logs plainly to stdout and exits cleanly on SIGTERM
+    /// or Ctrl+C rather than needing to be killed.
+    /// </summary>
+    private static async Task<int> RunHeadlessAsync(IGpuStatsProvider stats, ExportOptions export)
+    {
+        PrometheusExporter exporter;
+        try
+        {
+            exporter = new PrometheusExporter(stats, export.Port, export.Host);
+            exporter.Start();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"cxgpu: {ex.Message}");
+            return 1;
+        }
+
+        using (exporter)
+        {
+            var gpuCount = stats.ReadSnapshot().Gpus.Count;
+            Console.WriteLine($"cxgpu {AppVersion} exporter on http://{export.Host}:{export.Port}/metrics");
+            Console.WriteLine($"Serving {gpuCount} GPU(s). Ctrl+C to stop.");
+
+            // Both signals resolve the same wait, so `systemctl stop` and Ctrl+C behave identically.
+            var stop = new TaskCompletionSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.TrySetResult(); };
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => stop.TrySetResult();
+
+            await stop.Task;
+            Console.WriteLine("cxgpu exporter stopped.");
+        }
+
+        return 0;
     }
 
     private static string AppVersion =>
@@ -85,6 +159,14 @@ internal class Program
                               exercising the multi-GPU view on a single-GPU machine, or
                               with no NVIDIA driver at all. Also settable via
                               CXGPU_FAKE_GPUS=N.
+              --prometheus[=PORT]
+                              Serve metrics at /metrics (default port
+                              {PrometheusExporter.DefaultPort}). Binds localhost; fails if the port
+                              is taken rather than picking another.
+              --prometheus-host=HOST
+                              Interface to bind instead of localhost. Use 0.0.0.0
+                              to expose the exporter on the network.
+              --no-ui         Run the exporter without the TUI. Requires --prometheus.
               -h, --help      Show this help and exit.
               -v, --version   Show the version and exit.
 
