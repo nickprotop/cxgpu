@@ -121,7 +121,13 @@ internal class Program
         using (exporter)
         {
             var gpuCount = stats.ReadSnapshot().Gpus.Count;
-            Console.WriteLine($"cxgpu {AppVersion} exporter on http://{export.Host}:{export.Port}/metrics");
+            Console.WriteLine($"cxgpu {AppVersion} exporter on http://{export.DisplayHost}:{export.Port}/metrics");
+
+            // A public bind is stated explicitly rather than left implied by a flag typed once: this
+            // exposes hostnames, GPU models and process counts to anything that can reach the port.
+            if (export.IsPublic)
+                Console.WriteLine($"Listening on {export.DisplayHost} — reachable from the network.");
+
             Console.WriteLine($"Serving {gpuCount} GPU(s). Ctrl+C to stop.");
 
             // Both signals resolve the same wait, so `systemctl stop` and Ctrl+C behave identically.
@@ -159,14 +165,19 @@ internal class Program
                               exercising the multi-GPU view on a single-GPU machine, or
                               with no NVIDIA driver at all. Also settable via
                               CXGPU_FAKE_GPUS=N.
-              --prometheus[=PORT]
-                              Serve metrics at /metrics (default port
-                              {PrometheusExporter.DefaultPort}). Binds localhost; fails if the port
-                              is taken rather than picking another.
-              --prometheus-host=HOST
-                              Interface to bind instead of localhost. Use 0.0.0.0
+              --prometheus    Serve Prometheus metrics at /metrics. Fails if the port
+                              is taken rather than quietly picking another.
+              --port PORT     Port for the exporter (default {PrometheusExporter.DefaultPort}).
+              --bind ADDRESS  Interface to bind (default {ExportOptions.DefaultHost}). Use 0.0.0.0
                               to expose the exporter on the network.
               --no-ui         Run the exporter without the TUI. Requires --prometheus.
+
+            Export examples:
+              cxgpu --prometheus                     UI plus metrics on localhost
+              cxgpu --prometheus --no-ui             headless exporter
+              cxgpu --prometheus --no-ui &           the same, backgrounded
+              cxgpu --prometheus --port 9100 --bind 0.0.0.0
+                                                     served on all interfaces
               -h, --help      Show this help and exit.
               -v, --version   Show the version and exit.
 

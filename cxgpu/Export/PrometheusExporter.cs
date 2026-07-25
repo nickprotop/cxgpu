@@ -34,6 +34,9 @@ internal sealed class PrometheusExporter : IDisposable
     public int Port { get; }
     public string Host { get; }
 
+    /// <summary>The bind address as a human wrote it — "+" is the listener's spelling for "all".</summary>
+    public string DisplayHost => Host == "+" ? "0.0.0.0" : Host;
+
     public PrometheusExporter(IGpuStatsProvider stats, int port = DefaultPort,
                               string host = "localhost")
     {
@@ -54,9 +57,15 @@ internal sealed class PrometheusExporter : IDisposable
         }
         catch (HttpListenerException ex)
         {
+            // Binding a wildcard address needs privileges on some systems, so the two likely causes
+            // are named rather than leaving the user to guess which applies.
+            var hint = Host == "+"
+                ? "The port may be in use, or binding all interfaces may require elevated privileges."
+                : "Another process may already hold the port.";
+
             throw new InvalidOperationException(
-                $"Cannot listen on http://{Host}:{Port}/ — {ex.Message}. " +
-                "Another process may already hold the port; pass --prometheus=PORT to choose another.",
+                $"Cannot listen on http://{DisplayHost}:{Port}/ — {ex.Message}. " +
+                $"{hint} Pass --port PORT to choose another.",
                 ex);
         }
 
@@ -103,7 +112,7 @@ internal sealed class PrometheusExporter : IDisposable
         if (path is "/" or "")
         {
             WriteText(context, 200,
-                $"cxgpu exporter\nMetrics: http://{Host}:{Port}/metrics\n", "text/plain");
+                $"cxgpu exporter\nMetrics: http://{DisplayHost}:{Port}/metrics\n", "text/plain");
             return;
         }
 
