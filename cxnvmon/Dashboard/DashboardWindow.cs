@@ -39,6 +39,12 @@ internal sealed class DashboardWindow
         _config = config;
     }
 
+    private GpuBackendRegistry? Registry => _stats as GpuBackendRegistry;
+
+    // Announces operations slow enough to notice — currently the GPU switch, whose repaint costs
+    // several blocking vendor-tool reads.
+    private BusyIndicator _busy = null!;
+
     public void Create()
     {
         _mainWindow = new WindowBuilder(_windowSystem)
@@ -93,11 +99,13 @@ internal sealed class DashboardWindow
         if (_mainWindow == null) return;
         var mainWindow = _mainWindow;
 
+        _busy = new BusyIndicator(_windowSystem);
+
         // Register the GPU backends as framework plugins now that the window system exists. They were
         // constructed and probed before it did (the factory runs first), so registration is a separate
         // step from probing. It only affects discoverability — plugin state, events, and service
         // lookup by name — since the app reads the backends through their typed interface.
-        (_stats as GpuBackendRegistry)?.RegisterWithPluginSystem(_windowSystem);
+        Registry?.RegisterWithPluginSystem(_windowSystem);
 
         BuildTopStatusBar(mainWindow);
         mainWindow.AddControl(Controls.RuleBuilder().StickyTop().WithColor(UIConstants.SeparatorColor).Build());
@@ -166,7 +174,7 @@ internal sealed class DashboardWindow
     // the caller falls back to the platform label.
     private string? ActiveVendorLabel()
     {
-        var backends = (_stats as GpuBackendRegistry)?.ActiveBackends;
+        var backends = Registry?.ActiveBackends;
         if (backends == null || backends.Count == 0) return null;
 
         var vendors = backends
@@ -185,7 +193,7 @@ internal sealed class DashboardWindow
     private void CreateTabs()
     {
         if (_config.ShowOverviewTab)
-            _tabs.Add(new OverviewTab(_windowSystem, _stats, _config));
+            _tabs.Add(new OverviewTab(_windowSystem, _stats, _config, _busy.Run));
         if (_config.ShowProcessesTab)
             // The process list follows the Overview's GPU selection (and only scopes at all when
             // there's more than one GPU), so switching GPU switches both views together.
@@ -205,7 +213,7 @@ internal sealed class DashboardWindow
     private void OpenSettings()
     {
         // Pass the live backends so the dialog can render their own declared settings generically.
-        var backends = (_stats as GpuBackendRegistry)?.ActiveBackends;
+        var backends = Registry?.ActiveBackends;
         SettingsDialog.Show(_windowSystem, _config, updated =>
         {
             // Apply live-updatable settings in place so the running update loop picks them up.

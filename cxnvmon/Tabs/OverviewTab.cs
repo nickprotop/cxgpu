@@ -45,12 +45,19 @@ internal class OverviewTab : BaseResponsiveTab
     // gutter and a column of slack, so a tile never sits flush against the border.
     private const int CardChromeWidth = 6;
 
-    public OverviewTab(ConsoleWindowSystem windowSystem, IGpuStatsProvider stats, Configuration.CxnvmonConfig config)
+    // Wraps a GPU switch in a visible "working" notification. Optional so the tab still functions
+    // (just without the indicator) if it is constructed without one.
+    private readonly Action<string, Action>? _runBusy;
+
+    public OverviewTab(ConsoleWindowSystem windowSystem, IGpuStatsProvider stats,
+                       Configuration.CxnvmonConfig config,
+                       Action<string, Action>? runBusy = null)
         : base(windowSystem, stats)
     {
         _sparklineHeight = config.SparklineHeight;
         _refreshSeconds = config.RefreshIntervalMs / 1000.0;
         _showTimeAxis = config.ShowTimeAxis;
+        _runBusy = runBusy;
     }
 
     // Resolves the GPU whose detail should be shown. Falls back to the first GPU when the selected
@@ -99,13 +106,27 @@ internal class OverviewTab : BaseResponsiveTab
         // and UpdatePanel only refreshes controls that are already there. Without a rebuild, moving
         // from an NVIDIA card to an AMD one would leave a stale Fan card frozen at NVIDIA's last
         // reading. Rebuild only when the capability set actually differs — the common case (same
-        // vendor, or a single vendor) still takes the cheap in-place path.
-        if (previousCaps != null && newCaps != null && previousCaps != newCaps)
-            RebuildGraphsPanel();
+        // vendor, or a single vendor) takes the cheap in-place path.
+        bool needsRebuild = previousCaps != null && newCaps != null && previousCaps != newCaps;
 
-        // Repaint immediately with the new selection rather than waiting for the next refresh tick,
-        // so switching feels instant.
-        UpdatePanel(Stats.ReadSnapshot());
+        void Apply()
+        {
+            if (needsRebuild)
+                RebuildGraphsPanel();
+
+            UpdatePanel(Stats.ReadSnapshot());
+        }
+
+        // Only announce the switch when it will actually be slow. The rebuild path re-reads every GPU
+        // through the vendor tools — around 390 ms measured — but the in-place path is a few
+        // milliseconds, and a dim-plus-toast that appears and vanishes within one or two frames reads
+        // as a glitch rather than as feedback. Predicting on needsRebuild is exact, because the
+        // rebuild is what costs.
+        if (needsRebuild && _runBusy != null)
+            _runBusy($"Loading GPU {gpuIndex}…", Apply);
+        else
+            Apply();
+
         return true;
     }
 
