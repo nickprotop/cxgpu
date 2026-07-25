@@ -54,6 +54,30 @@ internal sealed class DashboardWindow
         // rather than baked into the engine, so a user override takes effect without the engine
         // knowing config exists.
         _alerts = new AlertEngine(config.Alerts.ResolveFor);
+
+        // Point temperature COLOURING at the same thresholds the alerts use, so the colour on screen
+        // and the alert that fires agree, and a per-card override moves both together.
+        //
+        // Resolution needs the device info, which a GpuSample does not carry, so it is looked up by
+        // index from a cache refreshed once per tick. Calling ReadDeviceInfo() here directly would
+        // spawn a vendor subprocess for EVERY coloured temperature on EVERY frame.
+        GpuFormat.TemperatureThresholds = gpu =>
+            _thresholdCache.TryGetValue(gpu.Index, out var pair)
+                ? pair
+                : AlertThresholds.NvidiaConsumer.TemperatureC;
+    }
+
+    // Per-GPU temperature thresholds, refreshed once per update tick (see RefreshThresholdCache).
+    private readonly Dictionary<int, ThresholdPair?> _thresholdCache = new();
+
+    /// <summary>
+    /// Re-resolves each card's thresholds. Called once per tick rather than per render, since device
+    /// info comes from a vendor subprocess and the answer only changes when config or hardware does.
+    /// </summary>
+    private void RefreshThresholdCache(IReadOnlyList<GpuDeviceInfo> deviceInfos)
+    {
+        foreach (var info in deviceInfos)
+            _thresholdCache[info.Index] = _config.Alerts.ResolveFor(info).TemperatureC;
     }
 
     private GpuBackendRegistry? Registry => _stats as GpuBackendRegistry;
@@ -393,9 +417,15 @@ internal sealed class DashboardWindow
     /// </summary>
     private void UpdateAlerts(GpuSnapshot snapshot)
     {
+        var deviceInfos = _stats.ReadDeviceInfo();
+
+        // Colouring follows the configured thresholds even when alerting is switched off — the colours
+        // are about reading the numbers correctly, not about being notified.
+        RefreshThresholdCache(deviceInfos);
+
         if (!_config.Alerts.Enabled) return;
 
-        var changes = _alerts.Evaluate(snapshot, _stats.ReadDeviceInfo(), DateTime.UtcNow);
+        var changes = _alerts.Evaluate(snapshot, deviceInfos, DateTime.UtcNow);
 
         UpdateAlertBadge();
         ShowAlertToasts(changes);

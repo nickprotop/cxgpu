@@ -250,7 +250,7 @@ internal class OverviewTab : BaseResponsiveTab
         {
             GpuFormat.Metric(GpuFormat.IconUtil, $"{gpu.UtilizationPercent:F0}%", gpu.UtilizationPercent),
             GpuFormat.Metric(GpuFormat.IconMem, $"{gpu.MemoryUsedMb / 1024.0:F1}/{gpu.MemoryTotalMb / 1024.0:F1} GB", gpu.MemoryUsedPercent),
-            GpuFormat.Metric(GpuFormat.IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC),
+            GpuFormat.MetricColored(GpuFormat.IconTemp, $"{gpu.TemperatureC:F0}°C", GpuFormat.TemperatureColor(gpu)),
             GpuFormat.Metric(GpuFormat.IconPower, $"{gpu.PowerDrawWatts:F0} W", powerPct)
         };
 
@@ -776,7 +776,7 @@ internal class OverviewTab : BaseResponsiveTab
                 if (FindControlRecursive<BarGraphControl>(tCard, "sel_temp_bar", out var tBar) && tBar != null)
                 {
                     tBar.Value = gpu.TemperatureC;
-                    tBar.FilledColor = UIConstants.ThresholdColor(gpu.TemperatureC);
+                    tBar.FilledColor = GpuFormat.TemperatureColor(gpu);
                 }
             }
 

@@ -1,3 +1,5 @@
+using cxgpu.Gpu.Alerts;
+using SharpConsoleUI;
 using cxgpu.Gpu;
 
 namespace cxgpu.Helpers;
@@ -28,11 +30,15 @@ internal static class GpuFormat
     public const string IconMedia = "🎬";
 
     /// <summary>An "&lt;icon&gt; &lt;value&gt;" fragment: icon plus a threshold-coloured value.</summary>
-    public static string Metric(string icon, string value, double thresholdValue)
-    {
-        var color = UIConstants.ThresholdColor(thresholdValue).ToMarkup();
-        return $"{IconCell(icon)} [{color} bold]{value}[/]";
-    }
+    public static string Metric(string icon, string value, double thresholdValue) =>
+        MetricColored(icon, value, UIConstants.ThresholdColor(thresholdValue));
+
+    /// <summary>
+    /// The same fragment with the colour supplied directly — for quantities whose scale is not a
+    /// percentage, notably temperature (see <see cref="TemperatureColor"/>).
+    /// </summary>
+    public static string MetricColored(string icon, string value, Color color) =>
+        $"{IconCell(icon)} [{color.ToMarkup()} bold]{value}[/]";
 
     /// <summary>
     /// An icon padded to a uniform two-column cell.
@@ -139,6 +145,39 @@ internal static class GpuFormat
     // empty cell is U+2800 BRAILLE PATTERN BLANK — a real blank, not a mid-height dot, which floated
     // oddly against the bottom-anchored fills.
     private static readonly char[] BrailleColumns = { '⠀', '⡀', '⡄', '⡆', '⡇' };
+
+    /// <summary>
+    /// The alert thresholds in force, supplied by the app at startup so formatting can colour a
+    /// temperature by the SAME numbers that decide whether an alert fires.
+    ///
+    /// A static hook rather than a parameter threaded through every call site: colouring is otherwise
+    /// pure static formatting, and passing config into every renderer to reach three of them would be
+    /// a large change for a small gain. Defaults to the built-in consumer thresholds, so an app that
+    /// never sets it still colours sensibly.
+    /// </summary>
+    public static Func<GpuSample, ThresholdPair?> TemperatureThresholds { get; set; } =
+        _ => AlertThresholds.NvidiaConsumer.TemperatureC;
+
+    /// <summary>
+    /// Colour for a temperature in °C.
+    ///
+    /// Temperature is NOT a percentage, so <see cref="UIConstants.ThresholdColor"/>'s 60/85 bands are
+    /// wrong for it: 85°C fires on a 3090 doing ordinary work, and an AMD card running at 95°C by
+    /// design would read permanently critical. Reading the alert thresholds instead means the colour
+    /// on screen and the alert that fires agree, and a per-card override moves both together.
+    /// </summary>
+    public static Color TemperatureColor(GpuSample gpu)
+    {
+        var pair = TemperatureThresholds(gpu);
+        if (pair == null) return UIConstants.Normal;
+
+        return pair.SeverityFor(gpu.TemperatureC) switch
+        {
+            EventSeverity.Critical => UIConstants.Critical,
+            EventSeverity.Warning => UIConstants.Warning,
+            _ => UIConstants.Normal
+        };
+    }
 
     /// <summary>
     /// Seconds -> compact delta: "45s", "2m", "1m30s", "1h". Shared by the sparkline time axis and the

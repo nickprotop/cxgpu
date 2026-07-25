@@ -118,7 +118,7 @@ internal static class GpuHeroPanel
         // they describe the card's thermal state.
         var vitals = new List<string>
         {
-            GpuFormat.Metric(GpuFormat.IconTemp, $"{gpu.TemperatureC:F0}°C", gpu.TemperatureC),
+            GpuFormat.MetricColored(GpuFormat.IconTemp, $"{gpu.TemperatureC:F0}°C", GpuFormat.TemperatureColor(gpu)),
             GpuFormat.Metric(GpuFormat.IconPower, $"{gpu.PowerDrawWatts:F0}W", GpuFormat.PowerPercent(gpu))
         };
         if (gpu.Caps.FanSpeed)

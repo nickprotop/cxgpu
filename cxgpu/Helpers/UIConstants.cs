@@ -65,6 +65,15 @@ internal static class UIConstants
     public static readonly Color[] SparkCpuTotal = [new(0x0d, 0x94, 0x88), new(0x4e, 0xcd, 0xc4), new(0xff, 0xd9, 0x3d), new(0xff, 0x6b, 0x6b)];
     public static readonly Color[] SparkMemUsed = [new(0x1a, 0x6b, 0x4a), new(0x4e, 0xcd, 0xc4), new(0xff, 0xd9, 0x3d), new(0xff, 0x6b, 0x6b)];
 
+    /// <summary>
+    /// Colour for a PERCENTAGE (utilization, memory, fan, power-of-cap). The bands suit a 0-100 scale
+    /// where 85%+ genuinely warrants attention.
+    ///
+    /// Deliberately NOT used for temperature: °C is not a percentage, and 85 as a critical point fires
+    /// on a card doing ordinary work. Temperature goes through
+    /// <see cref="GpuFormat.TemperatureColor"/>, which reads the same thresholds the alerts use, so the
+    /// colour on screen and the alert that fires cannot disagree.
+    /// </summary>
     public static Color ThresholdColor(double value) => value switch
     {
         < 60 => Normal,

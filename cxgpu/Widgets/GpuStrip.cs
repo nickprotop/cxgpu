@@ -201,7 +201,7 @@ internal sealed class GpuStrip
             // Mem/temp keep single-letter prefixes instead of icons: eight repeated emoji carried no
             // distinguishing information and dominated the row visually.
             sb.Append($"[{muted}]m[/][{UIConstants.ThresholdColor(gpu.MemoryUsedPercent).ToMarkup()}]{gpu.MemoryUsedPercent,3:F0}%[/]  ");
-            sb.Append($"[{muted}]t[/][{UIConstants.ThresholdColor(gpu.TemperatureC).ToMarkup()}]{gpu.TemperatureC,3:F0}°[/]");
+            sb.Append($"[{muted}]t[/][{GpuFormat.TemperatureColor(gpu).ToMarkup()}]{gpu.TemperatureC,3:F0}°[/]");
             sb.Append($"[{enclosure}]{TileClose}[/]");
             sb.Append("[/]");
 
