@@ -113,9 +113,12 @@ exited" are distinct messages, not a generic failure.
 | 🧩 **Fleet Dashboard** | Per-GPU hero panels plus aggregate totals, on the `‹DASH›` chip |
 | 📋 **Processes** | Expandable tree with GPU filter, sorting, per-process engine usage, and signal actions |
 | ⚠️ **Throttle Detection** | Named throttle reasons surfaced only when a real throttle is active |
+| 🔔 **Alerts** | Threshold and throttle events with toasts, a status-bar badge, and a history flyout |
+| 📈 **Session Stats** | Peak temperature, peak power and throttle time per GPU, in-app and on exit |
+| 📡 **Prometheus** | `--prometheus` serves `/metrics`; `--no-ui` runs it headless |
 | 🎬 **Encode / Decode** | NVENC/NVDEC utilization where the hardware reports it |
 | 🎯 **Capability-Aware** | Unsupported metrics are omitted, never faked as zero |
-| 🎛️ **Settings** | A paged settings dialog (F9) — refresh, graphs, tabs, and per-backend options |
+| 🎛️ **Settings** | A paged settings dialog (F9) — refresh, graphs, tabs, alerts, and per-backend options |
 | ❓ **Help Overlay** | `?` or F1 lists every binding, marking those that don't apply on this machine |
 | 📐 **Responsive** | Adapts to terminal width — side-by-side or stacked, wrapping panel grids |
 | 🧪 **Demo Mode** | `--demo[=N]` simulates up to 9 GPUs for states real hardware won't produce on demand |
@@ -134,7 +137,8 @@ exited" are distinct messages, not a generic failure.
 | F9 | Settings |
 | F10 / Esc | Exit |
 
-Status-bar hints and GPU tiles are clickable; double-clicking a dashboard panel opens that GPU.
+Status-bar hints and GPU tiles are clickable; double-clicking a dashboard panel opens that GPU. The
+alert badge at the right of the status bar opens the event history.
 
 ## Command Line
 
@@ -143,9 +147,61 @@ cxgpu [options]
 
   --demo[=N]      Run against N simulated GPUs (default 4, max 9) instead of
                   real hardware. Also settable via CXGPU_FAKE_GPUS=N.
+  --prometheus    Serve Prometheus metrics at /metrics.
+  --port PORT     Port for the exporter (default 9835).
+  --bind ADDRESS  Interface to bind (default localhost). Use 0.0.0.0 for all.
+  --no-ui         Run the exporter without the TUI. Requires --prometheus.
   -h, --help      Show help and exit.
   -v, --version   Show the version and exit.
 ```
+
+## Alerts
+
+cxgpu raises an event when a GPU crosses a threshold, and when the driver itself reports a throttle.
+Both land in one list, so the chips on screen and the alert history can never disagree.
+
+- **Warnings** raise a toast that dismisses itself; **criticals** raise one that stays until you
+  dismiss it. At most one toast per GPU per metric, so a card oscillating around a threshold cannot
+  bury the screen.
+- A **badge** appears at the right of the status bar once anything has fired. Click it for the
+  history — active events in colour, resolved ones dimmed with how long they lasted. That is the
+  point of keeping them: the throttle chips vanish when a condition clears, so "did it throttle while
+  I was at lunch?" is otherwise unanswerable.
+- Events are **edge-triggered with hysteresis**: one entry per episode, not one per refresh, and a
+  value resting on the threshold does not flap.
+
+Thresholds are per vendor and editable under **F9 → Alerts**. The defaults differ by part because the
+hardware does — a GeForce warns at 83 °C where a Radeon warns at 90 °C, and temperature colouring
+everywhere in the UI follows the same numbers, so what you see and what fires always agree.
+
+Throttle events come from the driver's own reason flags, never inferred. A backend that cannot read
+them contributes nothing rather than reporting "not throttling".
+
+## Prometheus
+
+```bash
+cxgpu --prometheus --no-ui &                        # headless exporter
+cxgpu --prometheus                                  # alongside the UI
+cxgpu --prometheus --port 9100 --bind 0.0.0.0       # on every interface
+```
+
+Metrics are served at `/metrics` and read through the same provider the UI uses, so a scrape and the
+screen cannot drift. Series carry a stable `card` label (the PCI address) as well as `gpu`, `name`
+and `backend` — an index-labelled series silently re-points at different hardware when a backend
+fails to probe, which is invisible in the UI but permanent in a time-series database.
+
+```
+cxgpu_temperature_celsius{gpu="0",name="NVIDIA GeForce RTX 3090",backend="NVIDIA",card="0000:01:00.0"} 44
+cxgpu_throttled{gpu="0",...,reason="thermal"} 0
+```
+
+**Unsupported metrics are absent, not zero.** On a mixed box the NVIDIA card exports fan, power and
+throttle series while the AMD card does not, because that backend genuinely cannot read them — a
+fabricated zero would be averaged into a dashboard forever with nobody noticing.
+
+The exporter binds **localhost** unless `--bind` says otherwise, warns on startup when it is
+listening publicly, and fails rather than quietly choosing another port if the one you asked for is
+taken.
 
 ## Configuration
 
@@ -171,7 +227,8 @@ cxgpu/
 ├── Program.cs                    # Entry point, CLI parsing
 ├── Configuration/                # CxgpuConfig (JSON load/save)
 ├── Gpu/
-│   ├── Abstractions/             # Models, IGpuBackend, capabilities, fleet summary, settings
+│   ├── Abstractions/             # Models, IGpuBackend, capabilities, identity, fleet summary
+│   ├── Alerts/                   # Threshold engine, events, session stats
 │   ├── GpuBackendRegistry.cs     # Probes backends, aggregates, assigns global GPU indices
 │   ├── GpuBackendPlugin.cs       # Backends as SharpConsoleUI plugin services
 │   ├── GpuStatsFactory.cs        # Backend selection and configuration
@@ -180,11 +237,15 @@ cxgpu/
 │       ├── Nvidia/               # nvidia-smi
 │       ├── Amd/                  # sysfs + hwmon + fdinfo, or amd-smi/rocm-smi
 │       └── Demo/                 # Synthetic GPUs for --demo
+├── Export/                       # Prometheus formatter, HTTP exporter, CLI options
 ├── Dashboard/                    # Main window, settings, help, busy indicator
 ├── Helpers/                      # UI constants, shared metric formatting, history
-├── Widgets/                      # Reusable controls (per-GPU hero panel)
+├── Widgets/                      # Reusable controls (hero panel, strip, alert portal)
 └── Tabs/                         # Overview (+ fleet dashboard), Processes
 ```
+
+Adding a vendor means writing one backend — the UI, alerts and exporter all adapt to what it declares
+it can read. See **[Writing a GPU backend](docs/WRITING-A-BACKEND.md)**.
 
 Backends implement SharpConsoleUI's `IPluginService`, so they are already valid plugins — the day the
 framework gains runtime assembly loading, they become drop-in without a refactor.
@@ -220,6 +281,12 @@ cxgpu-uninstall.sh
 ```powershell
 & "$env:LOCALAPPDATA\cxgpu\cxgpu-uninstall.ps1"
 ```
+
+## Contributing
+
+Bug reports, hardware reports and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md). Adding a vendor is one self-contained backend:
+[Writing a GPU backend](docs/WRITING-A-BACKEND.md).
 
 ## License
 
