@@ -179,6 +179,12 @@ internal class NvidiaBackend : GpuBackendPlugin, IGpuStatsProvider
         }
     }
 
+    /// <summary>
+    /// nvidia-smi processes are ordinary OS processes, so the platform mechanism applies.
+    /// </summary>
+    public override GpuSignalResult SignalProcess(int pid, GpuSignal signal) =>
+        ProcessSignals.Send(pid, signal);
+
     public override IReadOnlyList<GpuDeviceInfo> ReadDeviceInfo()
     {
         try

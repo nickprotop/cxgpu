@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using cxnvmon.Helpers;
 using cxnvmon.Stats;
@@ -572,13 +571,6 @@ internal class ProcessesTab : BaseResponsiveTab
 
     #region Process actions (signal / kill)
 
-    // POSIX kill(2). Needed for SIGTERM because .NET offers no portable "send SIGTERM":
-    // Process.CloseMainWindow() is a no-op for a headless GPU job (no window) and Process.Kill() is
-    // SIGKILL — so neither provides the graceful stop that SIGTERM is for.
-    [DllImport("libc", SetLastError = true, EntryPoint = "kill")]
-    private static extern int PosixKill(int pid, int sig);
-
-    private const int SIGTERM = 15;
 
     /// <summary>
     /// Opens the signal picker for the process under the cursor. Invoked from the expanded detail's
@@ -761,45 +753,46 @@ internal class ProcessesTab : BaseResponsiveTab
     private void TrySignal(GpuProcessSample proc, bool force)
     {
         var name = ShortenPath(proc.Name);
+        var signal = force ? GpuSignal.Kill : GpuSignal.Terminate;
 
-        try
+        // Routed to the backend that OWNS this GPU rather than performed here: which mechanism can
+        // stop a process is a vendor/platform property, and going through the backend is what makes
+        // the demo backend's refusal impossible to bypass from the UI.
+        var backend = (Stats as GpuBackendRegistry)?.BackendForGpu(proc.GpuIndex);
+        var result = backend?.SignalProcess(proc.Pid, signal) ?? GpuSignalResult.NotSupported;
+
+        var verb = force ? "SIGKILL" : "SIGTERM";
+        switch (result)
         {
-            if (force || RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                using var p = Process.GetProcessById(proc.Pid);
-                p.Kill();
-                var verb = force ? "SIGKILL sent to" : "Terminated";
-                Notify($"✓ {verb} {proc.Pid}", $"{name} was terminated", NotificationSeverity.Info);
-                return;
-            }
-
-            // POSIX: a real SIGTERM, so the process can shut down cleanly.
-            if (PosixKill(proc.Pid, SIGTERM) == 0)
-            {
-                Notify($"✓ SIGTERM sent to {proc.Pid}", $"{name} was asked to exit",
+            case GpuSignalResult.Ok:
+                Notify($"✓ {verb} sent to {proc.Pid}",
+                    force ? $"{name} was force terminated" : $"{name} was asked to exit",
                     NotificationSeverity.Info);
-                return;
-            }
+                break;
 
-            var err = Marshal.GetLastWin32Error();
-            var reason = err switch
-            {
-                1 => "permission denied — it belongs to another user",   // EPERM
-                3 => "no such process — it already exited",              // ESRCH
-                _ => $"kill(2) failed with errno {err}"
-            };
-            Notify($"⚠ SIGTERM failed for {proc.Pid}", $"{name}: {reason}",
-                NotificationSeverity.Warning);
-        }
-        catch (ArgumentException)
-        {
-            Notify($"Process {proc.Pid} no longer exists", $"{name} has already exited",
-                NotificationSeverity.Info);
-        }
-        catch (Exception ex)
-        {
-            Notify($"⚠ Signal failed for {proc.Pid}", $"{name}: {ex.Message}",
-                NotificationSeverity.Warning);
+            case GpuSignalResult.NotSupported:
+                Notify("Signalling not available",
+                    $"{name}: this GPU's data source cannot signal processes.",
+                    NotificationSeverity.Info);
+                break;
+
+            case GpuSignalResult.PermissionDenied:
+                Notify($"⚠ {verb} failed for {proc.Pid}",
+                    $"{name}: permission denied — it belongs to another user",
+                    NotificationSeverity.Warning);
+                break;
+
+            case GpuSignalResult.NoSuchProcess:
+                Notify($"Process {proc.Pid} no longer exists",
+                    $"{name} has already exited",
+                    NotificationSeverity.Info);
+                break;
+
+            default:
+                Notify($"⚠ {verb} failed for {proc.Pid}",
+                    $"{name}: the signal could not be delivered",
+                    NotificationSeverity.Warning);
+                break;
         }
     }
 

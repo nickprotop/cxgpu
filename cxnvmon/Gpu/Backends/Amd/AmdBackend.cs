@@ -138,6 +138,13 @@ internal sealed class AmdBackend : GpuBackendPlugin
     public override IReadOnlyList<GpuDeviceInfo> ReadDeviceInfo() =>
         Safe(r => r.ReadDeviceInfo(), Array.Empty<GpuDeviceInfo>());
 
+    /// <summary>
+    /// amdgpu clients are ordinary OS processes, so the platform mechanism applies. Gated by the
+    /// reader's ProcessSignal capability, which the UI checks before offering the action.
+    /// </summary>
+    public override GpuSignalResult SignalProcess(int pid, GpuSignal signal) =>
+        Capabilities.ProcessSignal ? ProcessSignals.Send(pid, signal) : GpuSignalResult.NotSupported;
+
     public override IReadOnlyList<GpuProcessSample> ReadProcesses() =>
         Safe(r => r.ReadProcesses(), Array.Empty<GpuProcessSample>());
 
