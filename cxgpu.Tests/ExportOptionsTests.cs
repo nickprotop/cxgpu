@@ -152,25 +152,14 @@ public class ExportOptionsTests
         Assert.Throws<ArgumentException>(() => ExportOptions.Parse(["--bind", "0.0.0.0"]));
     }
 
-    // ---- Compatibility ----------------------------------------------------------------------------
-
     [Fact]
-    public void TheOriginalPrometheusEqualsPortSpellingStillWorks()
+    public void PrometheusRejectsAValue()
     {
-        // Shipped in the first cut of this feature and may already be in a systemd unit; --port is the
-        // documented spelling now, but breaking it silently is not worth the tidiness.
-        var options = ExportOptions.Parse(["--prometheus=9100"]);
+        // One spelling per setting: accepting --prometheus=9100 as a port would mean two ways to say
+        // the same thing, and the error names the flag that does the job.
+        var ex = Assert.Throws<ArgumentException>(() => ExportOptions.Parse(["--prometheus=9100"]));
 
-        Assert.True(options.Prometheus);
-        Assert.Equal(9100, options.Port);
-    }
-
-    [Fact]
-    public void TheOriginalPrometheusHostSpellingStillWorks()
-    {
-        var options = ExportOptions.Parse(["--prometheus", "--prometheus-host=0.0.0.0"]);
-
-        Assert.Equal("+", options.Host);
+        Assert.Contains("--port", ex.Message);
     }
 
     // ---- Composition ------------------------------------------------------------------------------
@@ -195,5 +184,18 @@ public class ExportOptionsTests
         var options = ExportOptions.Parse(["--demo=4", "--prometheus", "--some-future-flag"]);
 
         Assert.True(options.Prometheus);
+    }
+
+    [Theory]
+    [InlineData("--prometheus-host=0.0.0.0")]
+    [InlineData("--prometheus-port=9100")]
+    [InlineData("--listen=0.0.0.0")]
+    [InlineData("--host=0.0.0.0")]
+    public void MisspelledExportFlagsAreRefusedNotIgnored(string flag)
+    {
+        // Regression: --prometheus-host= used to fall through the switch, so the exporter came up on
+        // localhost while the user believed they had bound 0.0.0.0. A flag that is silently discarded
+        // is worse than one that errors — the endpoint exists, just not where it was asked for.
+        Assert.Throws<ArgumentException>(() => ExportOptions.Parse(["--prometheus", flag]));
     }
 }

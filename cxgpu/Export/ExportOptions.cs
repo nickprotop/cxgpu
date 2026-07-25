@@ -31,9 +31,9 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
     public string DisplayHost => Host == "+" ? "0.0.0.0" : Host;
 
     /// <summary>
-    /// Parses the export flags. Both spellings are accepted for each option — <c>--port 9835</c> and
-    /// <c>--port=9835</c> — because a tool that takes only one of them is a papercut every time you
-    /// misremember which.
+    /// Parses the export flags. Both forms are accepted for value-taking options — <c>--port 9835</c>
+    /// and <c>--port=9835</c> — because a tool that takes only one of them is a papercut every time
+    /// you misremember which.
     ///
     /// <code>
     ///   --prometheus              serve metrics (default port 9835, loopback)
@@ -65,14 +65,11 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
                     prometheus = true;
                     break;
 
-                // Retained because it shipped in the first cut of this feature: --prometheus=PORT
-                // overloaded the flag with its own port. --port is the documented spelling now, but
-                // silently breaking a command someone already put in a systemd unit is not worth the
-                // tidiness.
-                case ("--prometheus", var legacyPort):
-                    prometheus = true;
-                    port = ParsePort(legacyPort!);
-                    break;
+                // --prometheus takes no value. Accepting one silently (as a port, say) would mean two
+                // spellings for the same setting, so it is reported instead.
+                case ("--prometheus", _):
+                    throw new ArgumentException(
+                        "--prometheus takes no value; use --port PORT to choose a port.");
 
                 case ("--port", var value):
                     port = ParsePort(Required(value, "--port", "a port number (1-65535)"));
@@ -82,14 +79,18 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
                     host = ParseHost(Required(value, "--bind", "an address (e.g. 0.0.0.0)"));
                     break;
 
-                // The original name for --bind, kept for the same reason as --prometheus=PORT.
-                case ("--prometheus-host", var value):
-                    host = ParseHost(Required(value, "--prometheus-host", "an address (e.g. 0.0.0.0)"));
-                    break;
-
                 case ("--no-ui", _):
                     noUi = true;
                     break;
+
+                // An unrecognised --export-looking flag is REFUSED, not ignored. Falling through
+                // meant "--prometheus-host=0.0.0.0" started on localhost and said nothing — the
+                // endpoint came up somewhere other than where it was asked to, which is the exact
+                // silent failure this parser exists to prevent. Only flags in this namespace are
+                // checked; --demo and friends belong to other parsers.
+                case (var name, _) when IsExportFlag(name):
+                    throw new ArgumentException(
+                        $"Unknown option '{name}'. Did you mean --prometheus, --port, --bind or --no-ui?");
             }
         }
 
@@ -124,7 +125,7 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
 
         // Only flags that TAKE a value consume the next argument, and only when it does not itself
         // look like a flag — otherwise "cxgpu --port --no-ui" would swallow --no-ui as the port.
-        if (arg is "--port" or "--bind" or "--prometheus-host")
+        if (arg is "--port" or "--bind")
         {
             if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                 return (arg, args[++i]);
@@ -135,6 +136,14 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
 
         return (arg, null);
     }
+
+    /// <summary>
+    /// Whether a flag belongs to this parser's namespace, so a misspelling of one of OUR options is
+    /// caught while other parsers' flags (--demo, --help) pass through untouched.
+    /// </summary>
+    private static bool IsExportFlag(string name) =>
+        name.StartsWith("--prometheus", StringComparison.Ordinal) ||
+        name is "--port" or "--bind" or "--metrics" or "--exporter" or "--listen" or "--host";
 
     private static string Required(string? value, string flag, string what) =>
         value ?? throw new ArgumentException($"{flag} requires {what}.");
