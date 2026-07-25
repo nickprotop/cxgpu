@@ -28,6 +28,18 @@ internal static class GpuHeroPanel
     /// <summary>Cells in the inline bars — the panel's interior width less label and value.</summary>
     private const int BarCells = 12;
 
+    /// <summary>
+    /// Content rows every panel occupies, whatever it can measure.
+    ///
+    /// Capability gating means panels naturally differ in height — a card with no media engines has one
+    /// fewer line — and side by side that reads as a ragged, broken row rather than as a deliberate
+    /// omission. Padding to a fixed count keeps the row square while still omitting the metrics that
+    /// would be fabricated.
+    ///
+    /// Six: two bars, the vitals line, encode/decode, the history gauge, and the footer.
+    /// </summary>
+    private const int ContentRows = 6;
+
     /// <summary>Control name for a GPU's panel, so it can be found for in-place updates.</summary>
     public static string NameFor(int gpuIndex) => $"dash_gpu{gpuIndex}";
 
@@ -120,16 +132,20 @@ internal static class GpuHeroPanel
         // panel stays one control; it reads as a coarse history, which is all a fleet card needs.
         lines.Add($"[{UIConstants.Normal.ToMarkup()}]{HistoryGauge(history)}[/]");
 
+        // Footer rows, built first so padding can be inserted ABOVE them — the process count belongs on
+        // the panel's bottom edge, not floated up by blank filler.
+        var footer = new List<string>();
         var chip = GpuFormat.ThrottleChip(gpu);
-        lines.Add(chip.Length > 0
-            ? chip
-            : $"[{muted}]{processCount} process{(processCount == 1 ? "" : "es")}[/]");
+        if (chip.Length > 0) footer.Add(chip);
+        footer.Add($"[{muted}]{processCount} process{(processCount == 1 ? "" : "es")}[/]");
 
-        // When throttling, the chip takes the last line's place and the process count moves below it —
-        // a throttle is the more urgent fact and should not be pushed out of view.
-        if (chip.Length > 0)
-            lines.Add($"[{muted}]{processCount} process{(processCount == 1 ? "" : "es")}[/]");
+        // Pad to a uniform height so panels in a row close their borders on the same line. Without this,
+        // a card with fewer measurable metrics ends early and the row reads as broken rather than as
+        // deliberately sparse.
+        while (lines.Count + footer.Count < ContentRows)
+            lines.Add("");
 
+        lines.AddRange(footer);
         return string.Join("\n", lines);
     }
 
