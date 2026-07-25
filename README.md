@@ -3,7 +3,7 @@
 <div align="center">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![.NET](https://img.shields.io/badge/.NET-9.0-purple.svg)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20|%20Windows-orange.svg)]()
 [![GPUs](https://img.shields.io/badge/GPUs-NVIDIA%20|%20AMD-green.svg)]()
 
@@ -42,7 +42,7 @@ cxgpu
 irm https://raw.githubusercontent.com/nickprotop/cxgpu/main/install.ps1 | iex
 ```
 
-**Option 2: Build from source** (requires .NET 9)
+**Option 2: Build from source** (requires .NET 10)
 ```bash
 git clone https://github.com/nickprotop/cxgpu.git
 cd cxgpu
@@ -205,7 +205,7 @@ cd cxgpu
 dotnet build cxgpu.csproj
 ```
 
-**Key Technologies:** .NET 9, [SharpConsoleUI](https://github.com/nickprotop/ConsoleEx), `nvidia-smi`,
+**Key Technologies:** .NET 10, [SharpConsoleUI](https://github.com/nickprotop/ConsoleEx), `nvidia-smi`,
 Linux `sysfs`/`hwmon`, `amd-smi`/`rocm-smi`
 
 ## Uninstall
