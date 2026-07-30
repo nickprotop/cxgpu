@@ -183,7 +183,7 @@ internal static class SettingsDialog
                 // absent backend could never be switched on.
                 foreach (var known in GpuStatsFactory.KnownBackends)
                 {
-                    var live = activeBackends?.FirstOrDefault(b => b.BackendInfo.Name == known.Name);
+                    var live = activeBackends?.FirstOrDefault(b => b.InfoVia().Name == known.Name);
                     var enabled = known.IsEnabled(current);
                     var entry = known;
 
@@ -265,25 +265,8 @@ internal static class SettingsDialog
         if (!enabled) return "Disabled";
         if (live == null) return "Not detected";
 
-        var mechanism = live.BackendInfo.Mechanism;
+        var mechanism = live.InfoVia().Mechanism;
         return string.IsNullOrWhiteSpace(mechanism) ? "Active" : $"Active · {mechanism}";
-    }
-
-    /// <summary>
-    /// Asks a backend what settings it declares, through the framework's agnostic plugin ABI.
-    ///
-    /// Resolved from the INSTANCE rather than by service name, deliberately: this dialog's job
-    /// includes showing what a disabled or absent vendor could be configured to do, and such a
-    /// backend was never probed and never registered — so a name lookup would fail for precisely the
-    /// case the code exists to handle. Dialog-open frequency, so the boxing is free.
-    /// </summary>
-    private static IReadOnlyList<PluginSetting> DeclaredSettings(IGpuBackend backend)
-    {
-        if (backend is not SharpConsoleUI.Plugins.IPluginService service)
-            return backend.GetSettings();
-
-        return service.Execute("GetSettings") as IReadOnlyList<PluginSetting>
-            ?? Array.Empty<PluginSetting>();
     }
 
     /// <summary>
@@ -302,7 +285,9 @@ internal static class SettingsDialog
         IReadOnlyList<PluginSetting> settings;
         try
         {
-            settings = DeclaredSettings(live ?? known.Create());
+            // Instance-resolved, not by service name: this page must also show what a DISABLED or
+            // absent vendor could be configured to do, and such a backend was never registered.
+            settings = (live ?? known.Create()).GetSettingsVia();
         }
         catch
         {
@@ -363,11 +348,12 @@ internal static class SettingsDialog
         // fan card for this GPU?" answerable without reading the source.
         if (live != null)
         {
+            var liveInfo = live.InfoVia();
             panel.AddControl(Controls.Markup()
                 .AddLine("")
-                .AddLine($"[{muted}]Source[/]    [{text}]{live.BackendInfo.Mechanism}[/]")
-                .AddLine($"[{muted}]Version[/]   [{text}]{live.BackendInfo.Version ?? "—"}[/]")
-                .AddLine($"[{muted}]Reports[/]   [{text}]{DescribeCapabilities(live.Capabilities)}[/]")
+                .AddLine($"[{muted}]Source[/]    [{text}]{liveInfo.Mechanism}[/]")
+                .AddLine($"[{muted}]Version[/]   [{text}]{liveInfo.Version ?? "—"}[/]")
+                .AddLine($"[{muted}]Reports[/]   [{text}]{DescribeCapabilities(live.CapabilitiesVia())}[/]")
                 .WithMargin(1, 0, 1, 0)
                 .Build());
         }

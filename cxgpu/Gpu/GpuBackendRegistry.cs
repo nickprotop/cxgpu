@@ -29,7 +29,7 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
         {
             try
             {
-                if (backend.Probe())
+                if (backend.ProbeVia())
                     _active.Add(backend);
             }
             catch
@@ -61,10 +61,12 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
                 }
                 catch (Exception ex)
                 {
-                    // Registration is for discoverability only — the app reads backends directly, so a
-                    // failure here must not cost us the GPU data.
+                    // Non-fatal: every ABI call the app makes goes through the backend INSTANCE (see
+                    // GpuBackendAbi), so an unregistered backend still serves data. Only name-based
+                    // lookup — process signalling — depends on this, and that falls back to the
+                    // instance too.
                     windowSystem.LogService.LogError(
-                        $"Failed to register GPU backend '{backend.BackendInfo.Name}'", ex, "cxgpu");
+                        $"Failed to register GPU backend '{backend.InfoVia().Name}'", ex, "cxgpu");
                 }
             }
         }
@@ -90,8 +92,8 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
             IReadOnlyList<GpuProcessSample> backendProcs;
             try
             {
-                samples = backend.ReadSamples();
-                backendProcs = backend.ReadProcesses();
+                samples = backend.ReadSamplesVia();
+                backendProcs = backend.ReadProcessesVia();
             }
             catch
             {
@@ -102,7 +104,7 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
             // Vendor-local index -> global index for this backend. Capabilities are stamped on here,
             // where the owning backend is known, so the UI can tell an unsupported metric from a
             // measured zero without needing to know which vendor a card came from.
-            var capabilities = backend.Capabilities;
+            var capabilities = backend.CapabilitiesVia();
             var indexMap = new Dictionary<int, int>();
             foreach (var sample in samples)
             {
@@ -125,10 +127,9 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
     /// Combined static device info, with indices reassigned by the same rule as
     /// <see cref="ReadSnapshot"/> so the two agree.
     ///
-    /// Device info is read through the AGNOSTIC plugin ABI
-    /// (<c>IPluginService.Execute</c>) rather than the typed member — see
-    /// <see cref="ReadDeviceInfoVia"/> for why this is the right place for it, and why
-    /// <see cref="ReadSnapshot"/> is deliberately not.
+    /// Reads go through the agnostic plugin ABI (see <see cref="GpuBackendAbi"/>), as everywhere else
+    /// in the app. Merging here rather than at the call sites is what keeps the index-reassignment
+    /// rule in one place: the tabs and the exporter ask the REGISTRY for device info, never a backend.
     /// </summary>
     public IReadOnlyList<GpuDeviceInfo> ReadDeviceInfo()
     {
@@ -140,15 +141,16 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
             IReadOnlyList<GpuDeviceInfo> backendInfos;
             try
             {
-                backendInfos = ReadDeviceInfoVia(backend);
+                backendInfos = backend.ReadDeviceInfoVia();
             }
             catch
             {
                 continue;
             }
 
-            var backendName = backend.BackendInfo.Name;
-            var mechanism = backend.BackendInfo.Mechanism;
+            var identity = backend.InfoVia();
+            var backendName = identity.Name;
+            var mechanism = identity.Mechanism;
             foreach (var info in backendInfos)
             {
                 infos.Add(info with { Index = nextIndex, Backend = backendName, Mechanism = mechanism });
@@ -157,36 +159,6 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
         }
 
         return infos;
-    }
-
-    /// <summary>
-    /// Reads one backend's device info through the framework's agnostic plugin ABI, falling back to
-    /// the typed member for a backend that is not a plugin.
-    ///
-    /// WHY HERE. Six call sites across the tabs and dashboard reach device info through
-    /// <see cref="IGpuStatsProvider"/> on the REGISTRY, not on a backend — because this method is
-    /// what makes vendor-local indices globally unique and stamps backend/mechanism onto each row.
-    /// Routing <c>Execute</c> at those call sites instead would mean each of them looping the
-    /// backends and repeating that merge rule, which is the precise bug the index-reassignment
-    /// comments exist to prevent. Doing it inside the loop leaves every caller untouched and keeps
-    /// the rule in one place.
-    ///
-    /// WHY NOT <see cref="ReadSnapshot"/>. That runs once a second per backend; it stays typed so
-    /// the tick path allocates no dictionary and boxes nothing. Device info is cheap here by
-    /// comparison — an uncached read spawns a vendor subprocess (see DashboardWindow), which dwarfs
-    /// a cast.
-    ///
-    /// The typed branch is a real fallback, not dead code: <see cref="IGpuBackend"/> does not
-    /// require plugin-hood, so a backend that isn't one — including a directly-constructed test
-    /// double — still works.
-    /// </summary>
-    private static IReadOnlyList<GpuDeviceInfo> ReadDeviceInfoVia(IGpuBackend backend)
-    {
-        if (backend is not SharpConsoleUI.Plugins.IPluginService service)
-            return backend.ReadDeviceInfo();
-
-        return service.Execute("ReadDeviceInfo") as IReadOnlyList<GpuDeviceInfo>
-            ?? Array.Empty<GpuDeviceInfo>();
     }
 
     /// <summary>
@@ -201,7 +173,7 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
             int count;
             try
             {
-                count = backend.ReadSamples().Count;
+                count = backend.ReadSamplesVia().Count;
             }
             catch
             {

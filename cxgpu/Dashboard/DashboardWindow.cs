@@ -256,7 +256,7 @@ internal sealed class DashboardWindow
         if (backends == null || backends.Count == 0) return null;
 
         var vendors = backends
-            .Select(b => b.BackendInfo.Vendor)
+            .Select(b => b.InfoVia().Vendor)
             .Where(v => !string.IsNullOrWhiteSpace(v) && v != "Demo")
             .Distinct()
             .ToList();

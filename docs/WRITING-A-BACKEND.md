@@ -28,6 +28,11 @@ is why `GpuCapabilities` exists, and it is the one thing a reviewer will check f
 Backends implement `IGpuBackend` (`cxgpu/Gpu/Abstractions/IGpuBackend.cs`). Most inherit
 `GpuBackendPlugin`, which adapts it to SharpConsoleUI's plugin system for you.
 
+You write typed members only. cxgpu itself calls every one of them through the framework's agnostic
+`IPluginService.Execute(name, parameters)` ABI, but `GpuBackendPlugin` derives that surface from your
+typed implementation — so there is no dictionary dispatch to write, and adding an operation there is
+not something a vendor backend needs to do.
+
 | Member | Contract |
 |---|---|
 | `BackendInfo` | Name and the mechanism actually selected. Only meaningful after `Probe()`. |

@@ -197,38 +197,105 @@ public class AgnosticAbiTests
         Assert.Throws<InvalidOperationException>(() => new AmdBackend().Execute("ApplySettings"));
     }
 
-    // --- The registry routes device info through the ABI without changing its merge rule ---
+    // --- The app reaches backends ONLY through the ABI ---
 
     [Fact]
     public void RegistryReadDeviceInfoGoesThroughTheAbi()
     {
         var backend = new AbiCountingBackend();
         var registry = new GpuBackendRegistry(new IGpuBackend[] { backend });
+        backend.ResetCounts();
 
         var infos = registry.ReadDeviceInfo();
 
         Assert.Equal(2, infos.Count);
 
-        // Execute was the ENTRY POINT. The typed member is still reached exactly once, because the
-        // agnostic surface is derived from it — that pass-through is the design, not a leak.
-        Assert.Equal(1, backend.ExecuteCalls);
+        // Execute was the ENTRY POINT. The typed member is still reached, because the agnostic
+        // surface is derived from it — that pass-through is the design, not a leak.
+        Assert.Contains("ReadDeviceInfo", backend.Operations);
         Assert.Equal(1, backend.TypedDeviceInfoCalls);
     }
 
     /// <summary>
-    /// ReadSamples must NOT be routed: it runs once a second per backend and is deliberately kept off
-    /// the boxing path. This pins that decision so a later well-meaning change has to argue with a test.
+    /// The TICK PATH routes too. An earlier revision carved ReadSamples out to avoid boxing; routing
+    /// everything is the current design, because a half-travelled ABI is the half that rots. This
+    /// pins the decision so reverting it has to argue with a test.
     /// </summary>
     [Fact]
-    public void RegistryReadSnapshotStaysTyped()
+    public void RegistryReadSnapshotGoesThroughTheAbi()
     {
         var backend = new AbiCountingBackend();
         var registry = new GpuBackendRegistry(new IGpuBackend[] { backend });
+        backend.ResetCounts();
+
+        var snapshot = registry.ReadSnapshot();
+
+        Assert.NotEmpty(snapshot.Gpus);
+        Assert.Contains("ReadSamples", backend.Operations);
+        Assert.Contains("ReadProcesses", backend.Operations);
+        Assert.Contains("Capabilities", backend.Operations);
+    }
+
+    /// <summary>Probing happens through the ABI as well, at construction.</summary>
+    [Fact]
+    public void RegistryProbesThroughTheAbi()
+    {
+        var backend = new AbiCountingBackend();
+
+        _ = new GpuBackendRegistry(new IGpuBackend[] { backend });
+
+        Assert.Contains("Probe", backend.Operations);
+    }
+
+    /// <summary>
+    /// ReadSamples must still precede ReadProcesses. The demo backend shares one snapshot between the
+    /// two so its animation tick does not double-step, so reordering them would change behaviour —
+    /// routing through Execute must not disturb that.
+    /// </summary>
+    [Fact]
+    public void SamplesAreReadBeforeProcesses()
+    {
+        var backend = new AbiCountingBackend();
+        var registry = new GpuBackendRegistry(new IGpuBackend[] { backend });
+        backend.ResetCounts();
 
         registry.ReadSnapshot();
 
-        Assert.Equal(0, backend.ExecuteCalls);
-        Assert.True(backend.TypedSampleCalls > 0);
+        var samplesAt = backend.Operations.IndexOf("ReadSamples");
+        var processesAt = backend.Operations.IndexOf("ReadProcesses");
+
+        Assert.True(samplesAt >= 0 && processesAt > samplesAt,
+            $"Expected ReadSamples before ReadProcesses, got: {string.Join(", ", backend.Operations)}");
+    }
+
+    /// <summary>Stored settings are applied through the ABI, dictionary marshalling and all.</summary>
+    [Fact]
+    public void ApplySettingsGoesThroughTheAbi()
+    {
+        var backend = new AbiCountingBackend();
+
+        backend.ApplySettingsVia(new Dictionary<string, string?> { ["Reader"] = "sysfs" });
+
+        Assert.Contains("ApplySettings", backend.Operations);
+        Assert.Equal("sysfs", backend.LastAppliedReader);
+    }
+
+    /// <summary>Identity is an ABI operation too, so no caller needs the typed property.</summary>
+    [Fact]
+    public void BackendInfoGoesThroughTheAbi()
+    {
+        var backend = new AbiCountingBackend();
+
+        Assert.Equal("Counting", backend.InfoVia().Name);
+        Assert.Contains("BackendInfo", backend.Operations);
+    }
+
+    [Fact]
+    public void ExecuteBackendInfoMatchesTypedCall()
+    {
+        var backend = Demo();
+
+        Assert.Equal(backend.BackendInfo, backend.Execute("BackendInfo"));
     }
 
     /// <summary>
@@ -319,13 +386,29 @@ public class AgnosticAbiTests
     /// <summary>A real plugin backend that records which surface the registry actually called.</summary>
     private sealed class AbiCountingBackend : GpuBackendPlugin
     {
-        public int ExecuteCalls { get; private set; }
+        /// <summary>Operation names seen by Execute, in call order.</summary>
+        public List<string> Operations { get; } = new();
+
         public int TypedDeviceInfoCalls { get; private set; }
         public int TypedSampleCalls { get; private set; }
+        public string? LastAppliedReader { get; private set; }
+
+        /// <summary>Clears the record, so a test can ignore the probe done at registry construction.</summary>
+        public void ResetCounts()
+        {
+            Operations.Clear();
+            TypedDeviceInfoCalls = 0;
+            TypedSampleCalls = 0;
+        }
 
         public override GpuBackendInfo BackendInfo => new("Counting", "Test", "memory", "1.0.0");
         public override GpuCapabilities Capabilities => new(PerProcessMemory: true);
         public override bool Probe() => true;
+
+        public override void ApplySettings(IReadOnlyDictionary<string, string?> values)
+        {
+            if (values.TryGetValue("Reader", out var reader)) LastAppliedReader = reader;
+        }
 
         public override IReadOnlyList<GpuSample> ReadSamples()
         {
@@ -341,7 +424,7 @@ public class AgnosticAbiTests
 
         public override object? Execute(string operationName, Dictionary<string, object>? parameters = null)
         {
-            ExecuteCalls++;
+            Operations.Add(operationName);
             return base.Execute(operationName, parameters);
         }
     }

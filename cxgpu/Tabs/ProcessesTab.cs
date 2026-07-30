@@ -807,9 +807,19 @@ internal class ProcessesTab : BaseResponsiveTab
     // did and we stopped there, signalling would silently vanish. GpuSignalResult exists so this UI
     // reports what actually happened instead of assuming success, and quietly losing the ability to
     // signal would break that promise more thoroughly than any failure it reports.
+    // The service name a backend is registered under. Taken from IPluginService.ServiceName where
+    // possible rather than rebuilt from BackendInfo: the name is the KEY the plugin system stored the
+    // backend under, so asking the plugin surface for it cannot drift from what registration used.
+    // It also breaks a small circularity — fetching BackendInfo through the ABI would mean needing a
+    // service to look up the name of the service.
+    private static string ServiceNameOf(IGpuBackend backend) =>
+        backend is SharpConsoleUI.Plugins.IPluginService service
+            ? service.ServiceName
+            : $"Gpu.{backend.InfoVia().Name}";
+
     private GpuSignalResult SignalVia(IGpuBackend backend, int pid, GpuSignal signal)
     {
-        var service = WindowSystem.PluginStateService.GetService($"Gpu.{backend.BackendInfo.Name}");
+        var service = WindowSystem.PluginStateService.GetService(ServiceNameOf(backend));
         if (service == null)
             return backend.SignalProcess(pid, signal);
 

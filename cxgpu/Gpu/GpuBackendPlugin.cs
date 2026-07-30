@@ -13,8 +13,13 @@ namespace cxgpu.Gpu;
 ///
 /// So this class pays that cost ONCE. Vendor backends override strongly-typed members
 /// (<see cref="IGpuBackend"/>) and never touch a dictionary; the agnostic surface is derived from them
-/// here. The app calls the typed members directly, so the once-a-second path allocates nothing extra
-/// — <see cref="Execute"/> exists for the foreign/future caller.
+/// here. Authors keep a typed contract, and the host gets a foreign-callable one.
+///
+/// The app reaches backends EXCLUSIVELY through <see cref="Execute"/> — including the once-a-second
+/// sample read. An earlier revision carved out that hot path to avoid boxing, but the exclusion
+/// bought nothing measurable: the vendor backends spawn a subprocess or read sysfs on the same tick,
+/// which costs orders of magnitude more than a cast, and a partially-agnostic surface is one whose
+/// untravelled half silently rots. Routing everything means the ABI is proven by ordinary use.
 ///
 /// The payoff: SharpConsoleUI currently has no runtime assembly loading
 /// (<c>LoadPlugin&lt;T&gt;</c> only instantiates types the host already references). When that lands,
@@ -60,6 +65,8 @@ internal abstract class GpuBackendPlugin : PluginBase, IPluginService, IGpuBacke
 
     public IReadOnlyList<ServiceOperation> GetAvailableOperations() => new[]
     {
+        new ServiceOperation("BackendInfo", "Identity and the resolved data-source mechanism",
+            Array.Empty<ServiceParameter>(), typeof(GpuBackendInfo)),
         new ServiceOperation("Probe", "Whether this backend can serve data on this machine",
             Array.Empty<ServiceParameter>(), typeof(bool)),
         new ServiceOperation("Capabilities", "Which metrics this backend can report",
@@ -97,6 +104,7 @@ internal abstract class GpuBackendPlugin : PluginBase, IPluginService, IGpuBacke
     {
         switch (operationName)
         {
+            case "BackendInfo": return BackendInfo;
             case "Probe": return Probe();
             case "Capabilities": return Capabilities;
             case "ReadSamples": return ReadSamples();

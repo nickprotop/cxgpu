@@ -79,12 +79,12 @@ internal static class GpuStatsFactory
     private static IGpuBackend Configured(IGpuBackend backend, Configuration.CxgpuConfig? config)
     {
         if (config != null &&
-            config.BackendSettings.TryGetValue(backend.BackendInfo.Name, out var values) &&
+            config.BackendSettings.TryGetValue(backend.InfoVia().Name, out var values) &&
             values.Count > 0)
         {
             try
             {
-                backend.ApplySettings(values);
+                backend.ApplySettingsVia(values);
             }
             catch
             {

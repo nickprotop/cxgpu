@@ -249,10 +249,10 @@ it can read. See **[Writing a GPU backend](docs/WRITING-A-BACKEND.md)**.
 
 Backends implement SharpConsoleUI's `IPluginService`, so they are already valid plugins — the day the
 framework gains runtime assembly loading, they become drop-in without a refactor. That agnostic
-surface is not merely latent: device info, declared settings and process signalling are read through
-`Execute`, and signalling resolves its backend by service name (`Gpu.NVIDIA`, `Gpu.AMD`) exactly as an
-external DLL would. Only the once-a-second sample read stays on the typed path, to keep it free of
-boxing.
+surface is not merely latent: cxgpu reaches backends **exclusively** through `Execute`, the
+once-a-second sample read included, and process signalling resolves its backend by service name
+(`Gpu.NVIDIA`, `Gpu.AMD`) exactly as an external DLL would. Vendor authors still implement the typed
+`IGpuBackend`; the agnostic surface is derived from it once, in `GpuBackendPlugin`.
 
 ## Building from Source
 
