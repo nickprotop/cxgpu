@@ -270,6 +270,23 @@ internal static class SettingsDialog
     }
 
     /// <summary>
+    /// Asks a backend what settings it declares, through the framework's agnostic plugin ABI.
+    ///
+    /// Resolved from the INSTANCE rather than by service name, deliberately: this dialog's job
+    /// includes showing what a disabled or absent vendor could be configured to do, and such a
+    /// backend was never probed and never registered — so a name lookup would fail for precisely the
+    /// case the code exists to handle. Dialog-open frequency, so the boxing is free.
+    /// </summary>
+    private static IReadOnlyList<PluginSetting> DeclaredSettings(IGpuBackend backend)
+    {
+        if (backend is not SharpConsoleUI.Plugins.IPluginService service)
+            return backend.GetSettings();
+
+        return service.Execute("GetSettings") as IReadOnlyList<PluginSetting>
+            ?? Array.Empty<PluginSetting>();
+    }
+
+    /// <summary>
     /// A backend's page: its enable toggle, whatever settings it declares for itself, and what it is
     /// currently reporting.
     /// </summary>
@@ -285,7 +302,7 @@ internal static class SettingsDialog
         IReadOnlyList<PluginSetting> settings;
         try
         {
-            settings = (live ?? known.Create()).GetSettings();
+            settings = DeclaredSettings(live ?? known.Create());
         }
         catch
         {

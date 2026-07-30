@@ -43,6 +43,11 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
     /// Registers each active backend with the framework's plugin system, so plugin state, events and
     /// service lookup (<c>Gpu.NVIDIA</c>, <c>Gpu.AMD</c>) work as documented. Split from the
     /// constructor because probing must not depend on the window system existing yet.
+    ///
+    /// This lookup now has a REAL CONSUMER: process signalling resolves the owning backend by service
+    /// name and invokes it through the agnostic ABI (see <c>ProcessesTab.TrySignal</c>). Failure below
+    /// is still non-fatal, because that call site falls back to the typed member — so a registration
+    /// failure costs discoverability, never the ability to signal.
     /// </summary>
     public void RegisterWithPluginSystem(SharpConsoleUI.ConsoleWindowSystem windowSystem)
     {
@@ -119,6 +124,11 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
     /// <summary>
     /// Combined static device info, with indices reassigned by the same rule as
     /// <see cref="ReadSnapshot"/> so the two agree.
+    ///
+    /// Device info is read through the AGNOSTIC plugin ABI
+    /// (<c>IPluginService.Execute</c>) rather than the typed member — see
+    /// <see cref="ReadDeviceInfoVia"/> for why this is the right place for it, and why
+    /// <see cref="ReadSnapshot"/> is deliberately not.
     /// </summary>
     public IReadOnlyList<GpuDeviceInfo> ReadDeviceInfo()
     {
@@ -130,7 +140,7 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
             IReadOnlyList<GpuDeviceInfo> backendInfos;
             try
             {
-                backendInfos = backend.ReadDeviceInfo();
+                backendInfos = ReadDeviceInfoVia(backend);
             }
             catch
             {
@@ -147,6 +157,36 @@ internal sealed class GpuBackendRegistry : IGpuStatsProvider
         }
 
         return infos;
+    }
+
+    /// <summary>
+    /// Reads one backend's device info through the framework's agnostic plugin ABI, falling back to
+    /// the typed member for a backend that is not a plugin.
+    ///
+    /// WHY HERE. Six call sites across the tabs and dashboard reach device info through
+    /// <see cref="IGpuStatsProvider"/> on the REGISTRY, not on a backend — because this method is
+    /// what makes vendor-local indices globally unique and stamps backend/mechanism onto each row.
+    /// Routing <c>Execute</c> at those call sites instead would mean each of them looping the
+    /// backends and repeating that merge rule, which is the precise bug the index-reassignment
+    /// comments exist to prevent. Doing it inside the loop leaves every caller untouched and keeps
+    /// the rule in one place.
+    ///
+    /// WHY NOT <see cref="ReadSnapshot"/>. That runs once a second per backend; it stays typed so
+    /// the tick path allocates no dictionary and boxes nothing. Device info is cheap here by
+    /// comparison — an uncached read spawns a vendor subprocess (see DashboardWindow), which dwarfs
+    /// a cast.
+    ///
+    /// The typed branch is a real fallback, not dead code: <see cref="IGpuBackend"/> does not
+    /// require plugin-hood, so a backend that isn't one — including a directly-constructed test
+    /// double — still works.
+    /// </summary>
+    private static IReadOnlyList<GpuDeviceInfo> ReadDeviceInfoVia(IGpuBackend backend)
+    {
+        if (backend is not SharpConsoleUI.Plugins.IPluginService service)
+            return backend.ReadDeviceInfo();
+
+        return service.Execute("ReadDeviceInfo") as IReadOnlyList<GpuDeviceInfo>
+            ?? Array.Empty<GpuDeviceInfo>();
     }
 
     /// <summary>

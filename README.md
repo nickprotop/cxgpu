@@ -248,7 +248,11 @@ Adding a vendor means writing one backend — the UI, alerts and exporter all ad
 it can read. See **[Writing a GPU backend](docs/WRITING-A-BACKEND.md)**.
 
 Backends implement SharpConsoleUI's `IPluginService`, so they are already valid plugins — the day the
-framework gains runtime assembly loading, they become drop-in without a refactor.
+framework gains runtime assembly loading, they become drop-in without a refactor. That agnostic
+surface is not merely latent: device info, declared settings and process signalling are read through
+`Execute`, and signalling resolves its backend by service name (`Gpu.NVIDIA`, `Gpu.AMD`) exactly as an
+external DLL would. Only the once-a-second sample read stays on the typed path, to keep it free of
+boxing.
 
 ## Building from Source
 

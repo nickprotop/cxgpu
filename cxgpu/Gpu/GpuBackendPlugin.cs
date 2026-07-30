@@ -89,7 +89,11 @@ internal abstract class GpuBackendPlugin : PluginBase, IPluginService, IGpuBacke
             null)
     };
 
-    public object? Execute(string operationName, Dictionary<string, object>? parameters = null)
+    /// <summary>
+    /// Virtual so a subclass can observe or wrap dispatch — used by the ABI tests to prove the app
+    /// really reaches a backend through this surface rather than the typed members.
+    /// </summary>
+    public virtual object? Execute(string operationName, Dictionary<string, object>? parameters = null)
     {
         switch (operationName)
         {

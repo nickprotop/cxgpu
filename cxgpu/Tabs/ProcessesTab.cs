@@ -759,7 +759,7 @@ internal class ProcessesTab : BaseResponsiveTab
         // stop a process is a vendor/platform property, and going through the backend is what makes
         // the demo backend's refusal impossible to bypass from the UI.
         var backend = (Stats as GpuBackendRegistry)?.BackendForGpu(proc.GpuIndex);
-        var result = backend?.SignalProcess(proc.Pid, signal) ?? GpuSignalResult.NotSupported;
+        var result = backend == null ? GpuSignalResult.NotSupported : SignalVia(backend, proc.Pid, signal);
 
         var verb = force ? "SIGKILL" : "SIGTERM";
         switch (result)
@@ -794,6 +794,32 @@ internal class ProcessesTab : BaseResponsiveTab
                     NotificationSeverity.Warning);
                 break;
         }
+    }
+
+    // Delivers the signal through the framework's AGNOSTIC plugin ABI: the backend is resolved by
+    // service name ("Gpu.NVIDIA", "Gpu.AMD") and the operation invoked with a string name and a
+    // parameter dictionary. This is the one call site that exercises both name-based lookup and
+    // parameter marshalling — exactly the path an externally loaded backend DLL would take — and it
+    // can afford to, being driven by a keypress rather than the once-a-second tick.
+    //
+    // The typed fallback is load-bearing. Plugin registration is best-effort (see
+    // GpuBackendRegistry.RegisterWithPluginSystem), so lookup can legitimately come back empty; if it
+    // did and we stopped there, signalling would silently vanish. GpuSignalResult exists so this UI
+    // reports what actually happened instead of assuming success, and quietly losing the ability to
+    // signal would break that promise more thoroughly than any failure it reports.
+    private GpuSignalResult SignalVia(IGpuBackend backend, int pid, GpuSignal signal)
+    {
+        var service = WindowSystem.PluginStateService.GetService($"Gpu.{backend.BackendInfo.Name}");
+        if (service == null)
+            return backend.SignalProcess(pid, signal);
+
+        var result = service.Execute("SignalProcess", new Dictionary<string, object>
+        {
+            ["pid"] = pid,
+            ["signal"] = signal,
+        });
+
+        return result is GpuSignalResult signalResult ? signalResult : GpuSignalResult.Failed;
     }
 
     private void Notify(string title, string message, NotificationSeverity severity) =>
