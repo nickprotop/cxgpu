@@ -250,7 +250,7 @@ internal class ProcessesTab : BaseResponsiveTab
         {
             ProcessSort.Sm => procs.OrderByDescending(p => p.SmPercent ?? -1).ThenBy(p => p.Pid).ToList(),
             ProcessSort.Pid => procs.OrderBy(p => p.Pid).ToList(),
-            ProcessSort.Name => procs.OrderBy(p => ShortenPath(p.Name), StringComparer.OrdinalIgnoreCase)
+            ProcessSort.Name => procs.OrderBy(p => GpuFormat.ShortenPath(p.Name), StringComparer.OrdinalIgnoreCase)
                                      .ThenBy(p => p.Pid).ToList(),
             _ => procs.OrderByDescending(p => p.MemoryUsedMb).ThenBy(p => p.Pid).ToList()
         };
@@ -294,7 +294,7 @@ internal class ProcessesTab : BaseResponsiveTab
             // with nothing on screen saying which — and essential once "All GPUs" is selectable.
             $"[{muted}]{proc.GpuIndex.ToString().PadRight(GpuColWidth)}[/]" +
             $"[{text}]{proc.Pid,PidWidth}[/]  " +
-            $"[{text}]{Truncate(ShortenPath(proc.Name), NameWidth),-NameWidth}[/]" +
+            $"[{text}]{Truncate(GpuFormat.ShortenPath(proc.Name), NameWidth),-NameWidth}[/]" +
             $"[{muted}]{proc.MemoryUsedMb,MemWidth:F0}[/]  " +
             PercentCell(proc.SmPercent);
 
@@ -552,17 +552,6 @@ internal class ProcessesTab : BaseResponsiveTab
     // Process names arrive as full paths, which would crowd out every other column. Keep the
     // executable plus one parent directory — enough to tell two "python" processes apart. The full
     // path is always available in the expanded detail.
-    private static string ShortenPath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return path;
-
-        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length <= 1) return path;
-
-        var name = parts[^1];
-        var parent = parts.Length >= 2 ? parts[^2] : "";
-        return parent.Length > 0 ? $"{parent}/{name}" : name;
-    }
 
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..Math.Max(0, max - 1)] + "…";
@@ -712,7 +701,7 @@ internal class ProcessesTab : BaseResponsiveTab
             .AddLine($"[{UIConstants.Critical.ToMarkup()} bold]SIGKILL cannot be caught or ignored.[/]")
             .AddLine("")
             .AddLine($"[{muted}]Process[/] [{UIConstants.PrimaryText.ToMarkup()}]{proc.Pid}[/]  " +
-                     $"[{UIConstants.Accent.ToMarkup()}]{ShortenPath(proc.Name)}[/]")
+                     $"[{UIConstants.Accent.ToMarkup()}]{GpuFormat.ShortenPath(proc.Name)}[/]")
             .AddLine($"[{muted}]will be terminated immediately, losing unsaved work.[/]")
             .WithAlignment(HorizontalAlignment.Left)
             .WithMargin(1, 1, 1, 0)
@@ -752,7 +741,7 @@ internal class ProcessesTab : BaseResponsiveTab
     // distinctly rather than as a generic failure.
     private void TrySignal(GpuProcessSample proc, bool force)
     {
-        var name = ShortenPath(proc.Name);
+        var name = GpuFormat.ShortenPath(proc.Name);
         var signal = force ? GpuSignal.Kill : GpuSignal.Terminate;
 
         // Routed to the backend that OWNS this GPU rather than performed here: which mechanism can

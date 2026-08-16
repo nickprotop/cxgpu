@@ -40,6 +40,9 @@ internal class Program
             if (export.NoUi)
                 return await RunHeadlessAsync(stats, export);
 
+            if (export.GpuUsage)
+                return await RunGpuUsageAsync(stats, export);
+
             var windowSystem = new ConsoleWindowSystem(
                 new NetConsoleDriver(RenderMode.Buffer),
                 options: new ConsoleWindowSystemOptions(
@@ -142,8 +145,181 @@ internal class Program
         return 0;
     }
 
+    /// <summary>
+    /// Fire-and-forget GPU usage snapshot.
+    ///
+    /// Reads one snapshot, prints it in the requested format, and exits. No TUI, no background
+    /// tasks, no signal handling — just one read and one write.
+    /// </summary>
+    private static async Task<int> RunGpuUsageAsync(IGpuStatsProvider stats, ExportOptions export)
+    {
+        GpuSnapshot snapshot;
+        IReadOnlyList<GpuDeviceInfo> deviceInfos;
+        try
+        {
+            snapshot = stats.ReadSnapshot();
+            deviceInfos = stats.ReadDeviceInfo();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"cxgpu: {ex.Message}");
+            return 1;
+        }
+
+        if (snapshot.Gpus.Count == 0)
+        {
+            Console.Error.WriteLine(
+                "cxgpu: No GPUs detected. " +
+                "Make sure the NVIDIA driver or AMD ROCm is installed, or use --demo=N for testing.");
+            return 1;
+        }
+
+        // Resolve color setting: null means auto-detect (TTY + NO_COLOR).
+        // NO_COLOR takes precedence — if set, colors are always off.
+        var noColor = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
+        var view = export.View;
+        var useColor = !noColor && view.UseColor(Console.IsOutputRedirected);
+
+        if (view.WatchInterval is { } interval)
+            return await RunGpuUsageWatchAsync(stats, export, interval);
+
+        var sw = new System.IO.StringWriter();
+        if (view.IsJson)
+            sw.Write(UsageFormatter.RenderJson(snapshot, deviceInfos));
+        else
+            UsageFormatter.RenderTable(snapshot, deviceInfos, sw, view, useColor);
+
+        Console.Write(sw.ToString());
+        return 0;
+    }
+
+    /// <summary>
+    /// Continuously render GPU usage, refreshing in place until the user presses q.
+    ///
+    /// Uses ANSI cursor movement to overwrite the table on-screen rather than printing
+    /// newline-after-newline. Hides the cursor on entry, restores it on exit.
+    /// </summary>
+    private static async Task<int> RunGpuUsageWatchAsync(
+        IGpuStatsProvider stats, ExportOptions export, int intervalSec)
+    {
+        IReadOnlyList<GpuDeviceInfo> deviceInfos;
+        try
+        {
+            deviceInfos = stats.ReadDeviceInfo();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"cxgpu: {ex.Message}");
+            return 1;
+        }
+
+        try
+        {
+            var initial = stats.ReadSnapshot();
+            if (initial.Gpus.Count == 0)
+            {
+                Console.Error.WriteLine(
+                    "cxgpu: No GPUs detected. " +
+                    "Make sure the NVIDIA driver or AMD ROCm is installed, or use --demo=N for testing.");
+                return 1;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"cxgpu: {ex.Message}");
+            return 1;
+        }
+
+        var sw = new System.IO.StringWriter();
+        var cts = new CancellationTokenSource();
+
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            cts.Cancel();
+        };
+
+        Console.WriteLine($"Watching GPU usage (interval: {intervalSec}s). Press q to stop. Ctrl+C to quit.");
+
+        while (!cts.IsCancellationRequested)
+        {
+            GpuSnapshot snapshot;
+            try
+            {
+                snapshot = stats.ReadSnapshot();
+            }
+            catch
+            {
+                await Task.Delay(1000, cts.Token);
+                continue;
+            }
+
+            sw.GetStringBuilder().Clear();
+            UsageFormatter.RenderTable(
+                snapshot, deviceInfos, sw,
+                export.View,
+                export.View.UseColor(Console.IsOutputRedirected),
+                watching: true);
+            var rendered = sw.ToString();
+            var lines = rendered.Split('\n');
+
+            if (Console.IsOutputRedirected)
+            {
+                Console.WriteLine(rendered);
+                await Task.Delay(TimeSpan.FromSeconds(intervalSec), cts.Token);
+                continue;
+            }
+
+            try
+            {
+                Console.Write("\x1b[?25l"); // hide cursor
+            }
+            catch { /* best-effort */ }
+
+            try
+            {
+                Console.Write("\x1b[H");
+                Console.Write("\x1b[J");
+
+                foreach (var line in lines)
+                {
+                    Console.Write(line + "\n");
+                }
+
+                Console.Write("\x1b[J");
+            }
+            catch { /* fall through to print mode */ }
+
+            var delayMs = intervalSec * 1000;
+            var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(delayMs);
+            while (!cts.IsCancellationRequested)
+            {
+                if (Console.KeyAvailable)
+                {
+                    var key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Q)
+                    {
+                        Console.WriteLine();
+                        Console.WriteLine("Stopping watch.");
+                        cts.Cancel();
+                        break;
+                    }
+                }
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero) break;
+                await Task.Delay(Math.Max(100, (int)remaining.TotalMilliseconds), cts.Token);
+            }
+
+            if (cts.IsCancellationRequested) break;
+        }
+
+        try { Console.Write("\x1b[?25h"); } catch { }
+
+        return 0;
+    }
+
     private static string AppVersion =>
-        System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev";
+    System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev";
 
     private static void PrintUsage(bool versionOnly)
     {
@@ -171,13 +347,30 @@ internal class Program
               --bind ADDRESS  Interface to bind (default {ExportOptions.DefaultHost}). Use 0.0.0.0
                               to expose the exporter on the network.
               --no-ui         Run the exporter without the TUI. Requires --prometheus.
+              --gpu-usage     Print current GPU usage and exit.
+                              Shows Util, Mem, Temp, Power, Clock (SM/Mem),
+                              Enc/Dec, Throttle status, and Fan.
+                              With optional --format json for machine-readable output.
+                              Use --watch to live-update the table (press q to stop).
+                              Use --color / --no-color to override terminal color detection.
+                              Use --append-processes to also show per-process GPU usage.
+              --top N           Show only the top N processes by memory use.
+                              Requires --append-processes. N must be > 0.
+              --sort CRITERION  Sort processes by: memory (default), sm, pid, name.
+                              Requires --append-processes.
 
             Export examples:
               cxgpu --prometheus                     UI plus metrics on localhost
               cxgpu --prometheus --no-ui             headless exporter
               cxgpu --prometheus --no-ui &           the same, backgrounded
+              cxgpu --gpu-usage                      one-shot GPU usage table
+              cxgpu --gpu-usage --format json        one-shot GPU usage as JSON
+              cxgpu --gpu-usage --watch              live-updating GPU usage
+              cxgpu --gpu-usage --watch 5            refresh every 5 seconds
+              cxgpu --gpu-usage --color              force colored output (even when piped)
+              cxgpu --gpu-usage --append-processes    one-shot GPU usage with processes
               cxgpu --prometheus --port 9100 --bind 0.0.0.0
-                                                     served on all interfaces
+              served on all interfaces
               -h, --help      Show this help and exit.
               -v, --version   Show the version and exit.
 

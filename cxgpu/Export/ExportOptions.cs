@@ -9,9 +9,25 @@ namespace cxgpu.Export;
 /// <param name="Port">Port to serve on.</param>
 /// <param name="Host">Interface to bind. Loopback unless explicitly widened.</param>
 /// <param name="NoUi">Run headless — exporter only, no TUI.</param>
-internal sealed record ExportOptions(bool Prometheus, int Port, string Host, bool NoUi)
+/// <param name="GpuUsage">Print a GPU usage snapshot and exit.</param>
+/// <param name="View">
+/// How that snapshot is rendered — see <see cref="UsageView"/>. Bundled rather than spread across
+/// this record because the two halves answer different questions: the four fields above decide
+/// whether to serve metrics, these decide what a table looks like. It reached eleven positional
+/// parameters before anyone counted.
+/// </param>
+internal sealed record ExportOptions(
+    bool Prometheus, int Port, string Host, bool NoUi,
+    bool GpuUsage, UsageView View)
 {
-    public static ExportOptions None => new(false, PrometheusExporter.DefaultPort, DefaultHost, false);
+    public static ExportOptions None => new(
+        false, PrometheusExporter.DefaultPort, DefaultHost, false, false, UsageView.Default);
+
+    public const string DefaultFormat = "";
+
+    /// <summary>Kept as an alias so callers that already say <c>ExportOptions.JsonFormat</c> still
+    /// read naturally; the value itself belongs to the view.</summary>
+    public const string JsonFormat = UsageView.JsonFormat;
 
     /// <summary>
     /// Loopback by default. A monitor that silently listened on every interface of someone's laptop
@@ -36,10 +52,19 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
     /// you misremember which.
     ///
     /// <code>
-    ///   --prometheus              serve metrics (default port 9835, loopback)
-    ///   --port PORT               port to serve on
-    ///   --bind ADDRESS            interface to bind (0.0.0.0 for all)
-    ///   --no-ui                   exporter only, no TUI
+    ///   --gpu-usage     Print GPU usage snapshot and exit.
+    ///   --format FMT    Output format for --gpu-usage (json).
+    ///   --prometheus    Serve Prometheus metrics at /metrics. Fails if the port
+    ///                   is taken rather than quietly picking another.
+    ///   --port PORT     Port for the exporter (default {PrometheusExporter.DefaultPort}).
+    ///   --bind ADDRESS  Interface to bind (default {ExportOptions.DefaultHost}). Use 0.0.0.0
+    ///                   to expose the exporter on the network.
+    ///   --no-ui         Run the exporter without the TUI. Requires --prometheus.
+    ///   --color         Enable colored terminal output for --gpu-usage (auto-detected by default).
+    ///   --no-color      Disable colored terminal output for --gpu-usage.
+    ///   --append-processes  Also render a process table below the GPU grid.
+    ///   --watch [SECS]      Continuously refresh --gpu-usage (default 2s, max 3600s).
+    ///                        Press q to stop. Only works with table format.
     /// </code>
     /// </summary>
     /// <exception cref="ArgumentException">
@@ -52,10 +77,17 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
     {
         bool prometheus = false;
         bool noUi = false;
+        bool gpuUsage = false;
         int? port = null;
         string? host = null;
+        string? format = null;
+        bool? color = null;
+         bool appendProcesses = false;
+        int? watchInterval = null;
+        int? top = null;
+        string? sort = null;
 
-        for (int i = 0; i < args.Length; i++)
+         for (int i = 0; i < args.Length; i++)
         {
             var arg = args[i];
 
@@ -83,6 +115,58 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
                     noUi = true;
                     break;
 
+                case ("--gpu-usage", _):
+                    gpuUsage = true;
+                    break;
+
+                case ("--format", null):
+                    // Split already consumed the next arg if present;
+                    // null means --format with no value or --format=
+                    throw new ArgumentException("--format requires a value (e.g. json).");
+
+                case ("--format", var value):
+                    format = Required(value, "--format", "an output format (json).");
+                    break;
+
+                case ("--color", null):
+                    color = true;
+                    break;
+
+                case ("--no-color", null):
+                    color = false;
+                    break;
+
+                case ("--append-processes", null):
+                    appendProcesses = true;
+                    break;
+
+                case ("--watch", null):
+                    watchInterval = 2; // default 2 seconds when bare --watch
+                    break;
+
+                case ("--watch", var value):
+                    watchInterval = ParseWatchInterval(
+                        Required(value, "--watch", "an interval in seconds (e.g. 2)"));
+                    break;
+
+                case ("--top", null):
+                // Split already consumed the next arg if present;
+                // null means --top with no value or --top=
+                throw new ArgumentException("--top requires a value (e.g. 10).");
+
+                case ("--top", var value):
+                top = ParseTop(Required(value, "--top", "a positive integer (e.g. 10)"));
+                break;
+
+                case ("--sort", null):
+                // Split already consumed the next arg if present;
+                // null means --sort with no value or --sort=
+                throw new ArgumentException("--sort requires a value (e.g. memory).");
+
+                case ("--sort", var value):
+                sort = ValidateSort(Required(value, "--sort", "a sort criterion (memory, sm, pid, name)"));
+                break;
+
                 // An unrecognised --export-looking flag is REFUSED, not ignored. Falling through
                 // meant "--prometheus-host=0.0.0.0" started on localhost and said nothing — the
                 // endpoint came up somewhere other than where it was asked to, which is the exact
@@ -106,11 +190,40 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
         if (noUi && !prometheus)
             throw new ArgumentException("--no-ui requires --prometheus (there would be nothing to serve).");
 
+        if (gpuUsage && prometheus)
+            throw new ArgumentException("--gpu-usage and --prometheus cannot be used together.");
+        if (gpuUsage && noUi)
+            throw new ArgumentException("--gpu-usage and --no-ui cannot be used together.");
+
+        if (gpuUsage && !string.IsNullOrEmpty(format) && format != JsonFormat)
+            throw new ArgumentException($"--format '{format}' is not supported. Use 'json'.");
+
+        if (watchInterval.HasValue && !gpuUsage)
+            throw new ArgumentException("--watch requires --gpu-usage.");
+        if (watchInterval.HasValue && !string.IsNullOrEmpty(format))
+            throw new ArgumentException("--watch is only supported with the default table format.");
+
+        // BOTH SHAPE A TABLE THAT IS NOT BEING PRINTED. Refused rather than ignored, for the same
+        // reason --port is: a user who typed "--top 5" and got every row would conclude the flag is
+        // broken, and silently dropping an argument is how that belief starts.
+        if (top.HasValue && !appendProcesses)
+            throw new ArgumentException("--top requires --append-processes.");
+        if (sort != null && !appendProcesses)
+            throw new ArgumentException("--sort requires --append-processes.");
+
         return new ExportOptions(
             prometheus,
             port ?? PrometheusExporter.DefaultPort,
             host ?? DefaultHost,
-            noUi);
+            noUi,
+            gpuUsage,
+            new UsageView(
+                Format: format ?? DefaultFormat,
+                Color: color,
+                AppendProcesses: appendProcesses,
+                WatchInterval: watchInterval,
+                Top: top,
+                Sort: sort ?? UsageView.DefaultSort));
     }
 
     /// <summary>
@@ -125,7 +238,7 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
 
         // Only flags that TAKE a value consume the next argument, and only when it does not itself
         // look like a flag — otherwise "cxgpu --port --no-ui" would swallow --no-ui as the port.
-        if (arg is "--port" or "--bind")
+        if (arg is "--port" or "--bind" or "--format" or "--watch" or "--top" or "--sort")
         {
             if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                 return (arg, args[++i]);
@@ -143,7 +256,9 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
     /// </summary>
     private static bool IsExportFlag(string name) =>
         name.StartsWith("--prometheus", StringComparison.Ordinal) ||
-        name is "--port" or "--bind" or "--metrics" or "--exporter" or "--listen" or "--host";
+        name.StartsWith("--gpu-usage", StringComparison.Ordinal) ||
+        name.StartsWith("--watch", StringComparison.Ordinal) ||
+        name is "--format" or "--port" or "--bind" or "--metrics" or "--exporter" or "--listen" or "--host" or "--usage" or "--color" or "--no-color" or "--append-processes" or "--top" or "--sort";
 
     private static string Required(string? value, string flag, string what) =>
         value ?? throw new ArgumentException($"{flag} requires {what}.");
@@ -154,6 +269,29 @@ internal sealed record ExportOptions(bool Prometheus, int Port, string Host, boo
             throw new ArgumentException($"Invalid port: '{raw}' (expected 1-65535).");
 
         return port;
+    }
+
+    private static int ParseWatchInterval(string raw)
+    {
+        if (!int.TryParse(raw, out var v) || v < 1 || v > 3600)
+            throw new ArgumentException(
+                $"Invalid watch interval: '{raw}' (expected 1-3600 seconds).");
+        return v;
+    }
+
+    private static int ParseTop(string raw)
+    {
+    if (!int.TryParse(raw, out var top) || top < 1)
+    throw new ArgumentException($"Invalid --top value: '{raw}' (expected a positive integer > 0).");
+    return top;
+    }
+
+    private static string ValidateSort(string raw)
+    {
+    var sort = raw.ToLowerInvariant();
+    if (sort is not ("memory" or "sm" or "pid" or "name"))
+    throw new ArgumentException($"Invalid sort criterion: '{raw}' (expected memory, sm, pid, or name).");
+    return sort;
     }
 
     /// <summary>

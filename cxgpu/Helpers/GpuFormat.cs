@@ -15,6 +15,27 @@ namespace cxgpu.Helpers;
 /// </summary>
 internal static class GpuFormat
 {
+    /// <summary>
+    /// A process path shortened to its last two segments — "python3" from "/usr/bin/python3",
+    /// "bin-cuda/llama-server" from a path four levels deep.
+    ///
+    /// <para>SHARED, because it decides SORT ORDER as well as display. It lived privately in
+    /// ProcessesTab and was copied verbatim into UsageFormatter when the CLI gained --sort name;
+    /// two copies of an ordering rule is how the TUI and the one-shot table start disagreeing about
+    /// what "sorted by name" means, while both look correct in isolation.</para>
+    /// </summary>
+    public static string ShortenPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return path;
+
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length <= 1) return path;
+
+        var name = parts[^1];
+        var parent = parts.Length >= 2 ? parts[^2] : "";
+        return parent.Length > 0 ? $"{parent}/{name}" : name;
+    }
+
     // Metric icons — plain Unicode, NOT Nerd Font.
     //
     // Memory and fan are geometric rather than emoji: U+25A6 reads as a grid of memory cells, and

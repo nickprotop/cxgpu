@@ -198,4 +198,150 @@ public class ExportOptionsTests
         // is worse than one that errors — the endpoint exists, just not where it was asked for.
         Assert.Throws<ArgumentException>(() => ExportOptions.Parse(["--prometheus", flag]));
     }
-}
+
+    // ---- --watch ----------------------------------------------------------------------------------
+
+    [Fact]
+    public void WatchIntervalDefaultsToNullWhenNotSpecified()
+    {
+        var options = ExportOptions.Parse(["--gpu-usage", "--demo"]);
+
+        Assert.Null(options.View.WatchInterval);
+    }
+
+    [Fact]
+    public void WatchWithNoValueSetsDefault2Seconds()
+    {
+        var options = ExportOptions.Parse(["--gpu-usage", "--watch"]);
+
+        Assert.Equal(2, options.View.WatchInterval);
+    }
+
+    [Fact]
+    public void WatchWithExplicitValue()
+    {
+        var options = ExportOptions.Parse(["--gpu-usage", "--watch", "10"]);
+
+        Assert.Equal(10, options.View.WatchInterval);
+    }
+
+    [Fact]
+    public void WatchRequiresGpuUsage()
+    {
+        // --watch without --gpu-usage is meaningless and is refused.
+        Assert.Throws<ArgumentException>(() =>
+            ExportOptions.Parse(["--watch", "5"]));
+    }
+
+    [Fact]
+    public void WatchWithJsonFormatRejected()
+    {
+        // Watch mode only works with table format; --format json is incompatible.
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ExportOptions.Parse(["--gpu-usage", "--watch", "3", "--format", "json"]));
+
+        Assert.Contains("table format", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("abc")]
+    public void WatchRejectsInvalidInterval(string value)
+    {
+        // Use the = form so values starting with - are not swallowed by the flag parser.
+        Assert.Throws<ArgumentException>(() =>
+            ExportOptions.Parse(["--gpu-usage", $"--watch={value}"]));
+        }
+
+    [Fact]
+    public void WatchRecognisedInMisspellingCheck()
+    {
+        // A typo like --watcher should be caught as an unknown export flag, not silently ignored.
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ExportOptions.Parse(["--gpu-usage", "--watcher"]));
+
+        Assert.Contains("--watch", ex.Message);
+    }
+
+    // ---- --top and --sort ------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("--top", "10")]
+    [InlineData("--top=10", null)]
+    public void ParsesTopWithPositiveInteger(string first, string? second)
+    {
+    string[] args = second == null
+    ? ["--gpu-usage", "--append-processes", first]
+    : ["--gpu-usage", "--append-processes", first, second];
+
+    var options = ExportOptions.Parse(args);
+    Assert.Equal(10, options.View.Top);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("-5")]
+    public void RejectsTopZeroOrNegative(string value)
+    {
+    var ex = Assert.Throws<ArgumentException>(() =>
+    ExportOptions.Parse(["--gpu-usage", "--append-processes", $"--top={value}"]));
+    Assert.Contains("positive integer", ex.Message);
+    }
+
+    [Fact]
+    public void RejectsTopWithoutAppendProcesses()
+    {
+    var ex = Assert.Throws<ArgumentException>(() =>
+    ExportOptions.Parse(["--gpu-usage", "--top=10"]));
+    Assert.Contains("requires --append-processes", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("memory")]
+    [InlineData("sm")]
+    [InlineData("pid")]
+    [InlineData("name")]
+    [InlineData("MEMORY")] // case-insensitive
+    [InlineData("Sm")]     // mixed case
+    public void ParsesSortCriteria(string criterion)
+    {
+    var options = ExportOptions.Parse(
+    ["--gpu-usage", "--append-processes", "--sort", criterion]);
+    Assert.Equal(criterion.ToLowerInvariant(), options.View.Sort);
+    }
+
+    [Fact]
+    public void RejectsInvalidSortCriterion()
+    {
+    var ex = Assert.Throws<ArgumentException>(() =>
+    ExportOptions.Parse(["--gpu-usage", "--append-processes", "--sort", "invalid"]));
+    Assert.Contains("memory, sm, pid, or name", ex.Message);
+    }
+
+    [Fact]
+    public void SortDefaultsToMemory()
+    {
+    var options = ExportOptions.Parse(["--gpu-usage", "--append-processes"]);
+    Assert.Equal("memory", options.View.Sort);
+    }
+
+    [Fact]
+    public void TopAndSortTogether()
+    {
+    var options = ExportOptions.Parse(
+    ["--gpu-usage", "--append-processes", "--top=5", "--sort=pid"]);
+        
+    Assert.Equal(5, options.View.Top);
+    Assert.Equal("pid", options.View.Sort);
+    }
+
+    [Fact]
+    public void RejectsSortWithoutAppendProcesses()
+    {
+    var ex = Assert.Throws<ArgumentException>(() =>
+    ExportOptions.Parse(["--gpu-usage", "--sort=memory"]));
+    Assert.Contains("requires --append-processes", ex.Message);
+    }
+    }
