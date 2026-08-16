@@ -18,7 +18,7 @@
   </ItemGroup>
   <!-- CI/release: use NuGet package -->
   <ItemGroup Condition="!Exists('../ConsoleEx/SharpConsoleUI/SharpConsoleUI.csproj')">
-    <PackageReference Include="SharpConsoleUI" Version="2.5.14" />
+    <PackageReference Include="SharpConsoleUI" Version="2.5.23" />
   </ItemGroup>
 
   <!-- cxgpu.Tests/ has its own .csproj. The SDK's default **/*.cs glob would otherwise pull its
