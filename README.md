@@ -151,6 +151,8 @@ cxgpu [options]
   --port PORT     Port for the exporter (default 9835).
   --bind ADDRESS  Interface to bind (default localhost). Use 0.0.0.0 for all.
   --no-ui         Run the exporter without the TUI. Requires --prometheus.
+  --log-level LEVEL   Log panel verbosity, TUI mode only: error, warn (default), info, debug.
+  --log-file PATH Write logs to a file as well as the TUI log panel.
   -h, --help      Show help and exit.
   -v, --version   Show the version and exit.
 ```

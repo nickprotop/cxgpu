@@ -6,6 +6,7 @@ using SharpConsoleUI;
 using SharpConsoleUI.Configuration;
 using SharpConsoleUI.Drivers;
 using SharpConsoleUI.Helpers;
+using SharpConsoleUI.Logging;
 
 namespace cxgpu;
 
@@ -49,6 +50,15 @@ internal class Program
                     ShowTopPanel: false,
                     ShowBottomPanel: false,
                     InstallSynchronizationContext: true));
+
+            // Applies to the TUI log panel only. Headless mode keeps stdout for data and stderr for
+            // errors, so there is no panel for a verbosity to apply to.
+            windowSystem.LogService.MinimumLevel = export.LogLevel;
+
+            // A file sink survives the alternate screen buffer being torn down, which is the only way
+            // to read a startup failure or a crash after the terminal has been restored.
+            if (export.LogFilePath is string logFile)
+                windowSystem.LogService.EnableFileLogging(logFile);
 
             windowSystem.PanelStateService.TopStatus =
                 $"cxgpu - GPU Monitor ({GpuStatsFactory.GetPlatformName(args)})";
@@ -358,6 +368,10 @@ internal class Program
                               Requires --append-processes. N must be > 0.
               --sort CRITERION  Sort processes by: memory (default), sm, pid, name.
                               Requires --append-processes.
+              --log-level LEVEL   Log panel verbosity, TUI mode only: error, warn
+                              (default), info, debug. Headless mode is unaffected.
+              --log-file PATH Write logs to a file as well as the TUI log panel.
+                              Outlives the TUI, so it survives a crash.
 
             Export examples:
               cxgpu --prometheus                     UI plus metrics on localhost
@@ -371,6 +385,8 @@ internal class Program
               cxgpu --gpu-usage --append-processes    one-shot GPU usage with processes
               cxgpu --prometheus --port 9100 --bind 0.0.0.0
               served on all interfaces
+              cxgpu --log-level debug                verbose diagnostics in the panel
+              cxgpu --log-file /tmp/cxgpu.log        log to a file and the panel
               -h, --help      Show this help and exit.
               -v, --version   Show the version and exit.
 

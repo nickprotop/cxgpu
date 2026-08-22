@@ -1,5 +1,7 @@
 using System.Net;
 
+using SharpConsoleUI.Logging;
+
 namespace cxgpu.Export;
 
 /// <summary>
@@ -18,10 +20,18 @@ namespace cxgpu.Export;
 /// </param>
 internal sealed record ExportOptions(
     bool Prometheus, int Port, string Host, bool NoUi,
-    bool GpuUsage, UsageView View)
+    bool GpuUsage, UsageView View,
+    LogLevel LogLevel, string? LogFilePath)
 {
     public static ExportOptions None => new(
-        false, PrometheusExporter.DefaultPort, DefaultHost, false, false, UsageView.Default);
+        false, PrometheusExporter.DefaultPort, DefaultHost, false, false, UsageView.Default,
+        DefaultLogLevel, null);
+
+    /// <summary>
+    /// Warnings and errors only. The log panel shares the screen with the dashboard, so anything
+    /// chattier has to be asked for.
+    /// </summary>
+    public const LogLevel DefaultLogLevel = LogLevel.Warning;
 
     public const string DefaultFormat = "";
 
@@ -86,6 +96,8 @@ internal sealed record ExportOptions(
         int? watchInterval = null;
         int? top = null;
         string? sort = null;
+        LogLevel? logLevel = null;
+        string? logFilePath = null;
 
          for (int i = 0; i < args.Length; i++)
         {
@@ -167,6 +179,15 @@ internal sealed record ExportOptions(
                 sort = ValidateSort(Required(value, "--sort", "a sort criterion (memory, sm, pid, name)"));
                 break;
 
+                case ("--log-level", var value):
+                    logLevel = ParseLogLevel(
+                        Required(value, "--log-level", "error, warn, info, or debug"));
+                    break;
+
+                case ("--log-file", var value):
+                    logFilePath = Required(value, "--log-file", "a file path");
+                    break;
+
                 // An unrecognised --export-looking flag is REFUSED, not ignored. Falling through
                 // meant "--prometheus-host=0.0.0.0" started on localhost and said nothing — the
                 // endpoint came up somewhere other than where it was asked to, which is the exact
@@ -223,7 +244,9 @@ internal sealed record ExportOptions(
                 AppendProcesses: appendProcesses,
                 WatchInterval: watchInterval,
                 Top: top,
-                Sort: sort ?? UsageView.DefaultSort));
+                Sort: sort ?? UsageView.DefaultSort),
+            logLevel ?? DefaultLogLevel,
+            logFilePath);
     }
 
     /// <summary>
@@ -234,11 +257,17 @@ internal sealed record ExportOptions(
     {
         int eq = arg.IndexOf('=');
         if (eq > 0)
-            return (arg[..eq], arg[(eq + 1)..]);
+        {
+            // "--watch=" is the same as a bare "--watch": an empty value is no value, not the empty
+            // string, so the flag's own default applies rather than a parse failure.
+            var value = arg[(eq + 1)..];
+            return (arg[..eq], value.Length == 0 ? null : value);
+        }
 
         // Only flags that TAKE a value consume the next argument, and only when it does not itself
         // look like a flag — otherwise "cxgpu --port --no-ui" would swallow --no-ui as the port.
-        if (arg is "--port" or "--bind" or "--format" or "--watch" or "--top" or "--sort")
+        if (arg is "--port" or "--bind" or "--format" or "--watch" or "--top" or "--sort"
+            or "--log-level" or "--log-file")
         {
             if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                 return (arg, args[++i]);
@@ -258,6 +287,8 @@ internal sealed record ExportOptions(
         name.StartsWith("--prometheus", StringComparison.Ordinal) ||
         name.StartsWith("--gpu-usage", StringComparison.Ordinal) ||
         name.StartsWith("--watch", StringComparison.Ordinal) ||
+        name.StartsWith("--log-level", StringComparison.Ordinal) ||
+        name.StartsWith("--log-file", StringComparison.Ordinal) ||
         name is "--format" or "--port" or "--bind" or "--metrics" or "--exporter" or "--listen" or "--host" or "--usage" or "--color" or "--no-color" or "--append-processes" or "--top" or "--sort";
 
     private static string Required(string? value, string flag, string what) =>
@@ -293,6 +324,20 @@ internal sealed record ExportOptions(
     throw new ArgumentException($"Invalid sort criterion: '{raw}' (expected memory, sm, pid, or name).");
     return sort;
     }
+
+    /// <summary>
+    /// Maps the flag's spelling onto <see cref="LogLevel"/>. "warn" is accepted alongside the
+    /// enum's own "warning" because that is how the help text spells it and how most tools do.
+    /// </summary>
+    private static LogLevel ParseLogLevel(string raw) => raw.ToLowerInvariant() switch
+    {
+        "error" => LogLevel.Error,
+        "warn" or "warning" => LogLevel.Warning,
+        "info" => LogLevel.Information,
+        "debug" => LogLevel.Debug,
+        _ => throw new ArgumentException(
+            $"Invalid --log-level '{raw}'. Expected error, warn, info, or debug."),
+    };
 
     /// <summary>
     /// Validates the bind address. Accepts a hostname, a literal IP, or the wildcards that mean "every

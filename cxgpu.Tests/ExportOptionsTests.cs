@@ -1,4 +1,5 @@
 using cxgpu.Export;
+using SharpConsoleUI.Logging;
 
 namespace cxgpu.Tests;
 
@@ -218,6 +219,16 @@ public class ExportOptionsTests
     }
 
     [Fact]
+    public void WatchWithEmptyValueUsesTheDefault()
+    {
+        // "--watch=" carries no value, so it means the same as a bare --watch rather than failing to
+        // parse an empty string.
+        var options = ExportOptions.Parse(["--gpu-usage", "--watch="]);
+
+        Assert.Equal(2, options.View.WatchInterval);
+    }
+
+    [Fact]
     public void WatchWithExplicitValue()
     {
         var options = ExportOptions.Parse(["--gpu-usage", "--watch", "10"]);
@@ -344,4 +355,60 @@ public class ExportOptionsTests
     ExportOptions.Parse(["--gpu-usage", "--sort=memory"]));
     Assert.Contains("requires --append-processes", ex.Message);
     }
+    
+
+    // ---- Logging ------------------------------------------------------------------------------
+
+    [Fact]
+    public void LogLevelDefaultsToWarning()
+    {
+        var options = ExportOptions.Parse([]);
+
+        Assert.Equal(LogLevel.Warning, options.LogLevel);
+        Assert.Null(options.LogFilePath);
     }
+
+    [Theory]
+    [InlineData("error", LogLevel.Error)]
+    [InlineData("warn", LogLevel.Warning)]
+    [InlineData("info", LogLevel.Information)]
+    [InlineData("debug", LogLevel.Debug)]
+    public void LogLevelAcceptsEachSpelling(string value, LogLevel expected)
+    {
+        Assert.Equal(expected, ExportOptions.Parse([$"--log-level={value}"]).LogLevel);
+    }
+
+    [Fact]
+    public void LogLevelIsCaseInsensitive()
+    {
+        Assert.Equal(LogLevel.Debug, ExportOptions.Parse(["--log-level", "DEBUG"]).LogLevel);
+    }
+
+    [Fact]
+    public void LogLevelRejectsAnUnknownValue()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ExportOptions.Parse(["--log-level", "chatty"]));
+
+        Assert.Contains("--log-level", ex.Message);
+        Assert.Contains("error, warn, info, or debug", ex.Message);
+    }
+
+    [Fact]
+    public void LogLevelRequiresAValue()
+    {
+        Assert.Throws<ArgumentException>(() => ExportOptions.Parse(["--log-level"]));
+    }
+
+    [Fact]
+    public void LogFileCapturesThePath()
+    {
+        Assert.Equal("/tmp/cxgpu.log", ExportOptions.Parse(["--log-file", "/tmp/cxgpu.log"]).LogFilePath);
+    }
+
+    [Fact]
+    public void LogFileRequiresAValue()
+    {
+        Assert.Throws<ArgumentException>(() => ExportOptions.Parse(["--log-file"]));
+    }
+}
